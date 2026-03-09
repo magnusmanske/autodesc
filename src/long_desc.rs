@@ -20,7 +20,11 @@ const LONG_DESC_LANGUAGES: &[&str] = &["en", "nl", "fr"];
 #[derive(Debug, Clone)]
 pub(super) enum Fragment {
     Text(String),
-    Item { q: String, before: String, after: String },
+    Item {
+        q: String,
+        before: String,
+        after: String,
+    },
 }
 
 /// Date extracted from a Wikidata time claim or qualifier.
@@ -189,6 +193,22 @@ impl LongDescGenerator {
             return None;
         }
 
+        let claims_clone = claims.clone();
+        let opt_clone = opt.clone();
+        let (state, items_to_load) =
+            tokio::task::spawn_blocking(move || Self::get_items_to_load(&claims_clone, &opt_clone))
+                .await
+                .ok()?;
+
+        // Batch-load all items
+        if let Err(e) = wd.get_item_batch(&items_to_load).await {
+            tracing::warn!("Long desc: failed to load items: {}", e);
+        }
+
+        tokio::task::block_in_place(|| Self::finalize_generation(sd, q, claims, opt, wd, state))
+    }
+
+    fn get_items_to_load(claims: &Value, opt: &DescOptions) -> (LongDescState, Vec<String>) {
         let is_male = ShortDescription::has_pq_public(claims, 21, 6581097)
             || ShortDescription::has_pq_public(claims, 21, 2449503);
         let is_female = ShortDescription::has_pq_public(claims, 21, 6581072)
@@ -201,7 +221,7 @@ impl LongDescGenerator {
             _ => "<br/>".to_string(),
         };
 
-        let mut state = LongDescState {
+        let state = LongDescState {
             lang: opt.lang.clone(),
             is_male,
             is_female,
@@ -214,35 +234,59 @@ impl LongDescGenerator {
         let mut items_to_load: Vec<String> = Vec::new();
 
         // Items needed for description sections
-        add_claim_items(claims, "P27", &mut items_to_load); // Country of citizenship
-        add_claim_items(claims, "P106", &mut items_to_load); // Occupation
-        add_claim_items(claims, "P793", &mut items_to_load); // Significant event
-        add_claim_items(claims, "P19", &mut items_to_load); // Birth place
-        add_claim_items(claims, "P22", &mut items_to_load); // Father
-        add_claim_items(claims, "P25", &mut items_to_load); // Mother
-        add_claim_items(claims, "P69", &mut items_to_load); // Educated at
-        add_claim_items(claims, "P136", &mut items_to_load); // Genre
-        add_claim_items(claims, "P101", &mut items_to_load); // Field of work
-        add_claim_items(claims, "P39", &mut items_to_load); // Position held
-        add_claim_items(claims, "P463", &mut items_to_load); // Member of
-        add_claim_items(claims, "P108", &mut items_to_load); // Employer
-        add_claim_items(claims, "P26", &mut items_to_load); // Spouse
-        add_claim_items(claims, "P40", &mut items_to_load); // Child
-        add_claim_items(claims, "P20", &mut items_to_load); // Death place
-        add_claim_items(claims, "P509", &mut items_to_load); // Cause of death
-        add_claim_items(claims, "P157", &mut items_to_load); // Killed by
-        add_claim_items(claims, "P119", &mut items_to_load); // Place of burial
-        add_claim_items(claims, "P800", &mut items_to_load); // Notable work
+        add_claim_items(claims, "P27", &mut items_to_load);
+        // Country of citizenship
+        add_claim_items(claims, "P106", &mut items_to_load);
+        // Occupation
+        add_claim_items(claims, "P793", &mut items_to_load);
+        // Significant event
+        add_claim_items(claims, "P19", &mut items_to_load);
+        // Birth place
+        add_claim_items(claims, "P22", &mut items_to_load);
+        // Father
+        add_claim_items(claims, "P25", &mut items_to_load);
+        // Mother
+        add_claim_items(claims, "P69", &mut items_to_load);
+        // Educated at
+        add_claim_items(claims, "P136", &mut items_to_load);
+        // Genre
+        add_claim_items(claims, "P101", &mut items_to_load);
+        // Field of work
+        add_claim_items(claims, "P39", &mut items_to_load);
+        // Position held
+        add_claim_items(claims, "P463", &mut items_to_load);
+        // Member of
+        add_claim_items(claims, "P108", &mut items_to_load);
+        // Employer
+        add_claim_items(claims, "P26", &mut items_to_load);
+        // Spouse
+        add_claim_items(claims, "P40", &mut items_to_load);
+        // Child
+        add_claim_items(claims, "P20", &mut items_to_load);
+        // Death place
+        add_claim_items(claims, "P509", &mut items_to_load);
+        // Cause of death
+        add_claim_items(claims, "P157", &mut items_to_load);
+        // Killed by
+        add_claim_items(claims, "P119", &mut items_to_load);
+        // Place of burial
+        add_claim_items(claims, "P800", &mut items_to_load);
+        // Notable work
 
         // Also load qualifier items (P642 = "of" qualifier on positions, P794 = "as" on employers)
         add_qualifier_items(claims, "P39", "P642", &mut items_to_load);
         add_qualifier_items(claims, "P108", "P794", &mut items_to_load);
+        (state, items_to_load)
+    }
 
-        // Batch-load all items
-        if let Err(e) = wd.get_item_batch(&items_to_load).await {
-            tracing::warn!("Long desc: failed to load items: {}", e);
-        }
-
+    fn finalize_generation(
+        sd: &ShortDescription,
+        q: &str,
+        claims: &Value,
+        opt: &DescOptions,
+        wd: &mut WikiData,
+        mut state: LongDescState,
+    ) -> Option<String> {
         // Dispatch to the language-specific generator
         let lang_gen: &dyn LangGenerator = match opt.lang.as_str() {
             "en" => &lang_en::LangEn,
@@ -306,16 +350,13 @@ fn format_link(q: &str, label: &str, opt: &DescOptions, wd: &WikiData) -> String
             )
         }
         "wiki" => {
-            if let Some(page) = wd
-                .get_item(q)
-                .and_then(|item| {
-                    item.raw
-                        .get("sitelinks")
-                        .and_then(|s| s.get(&wiki))
-                        .and_then(|s| s.get("title"))
-                        .and_then(|t| t.as_str())
-                })
-            {
+            if let Some(page) = wd.get_item(q).and_then(|item| {
+                item.raw
+                    .get("sitelinks")
+                    .and_then(|s| s.get(&wiki))
+                    .and_then(|s| s.get("title"))
+                    .and_then(|t| t.as_str())
+            }) {
                 if page == label {
                     format!("[[{}]]", label)
                 } else {
@@ -326,16 +367,13 @@ fn format_link(q: &str, label: &str, opt: &DescOptions, wd: &WikiData) -> String
             }
         }
         "wikipedia" => {
-            if let Some(page) = wd
-                .get_item(q)
-                .and_then(|item| {
-                    item.raw
-                        .get("sitelinks")
-                        .and_then(|s| s.get(&wiki))
-                        .and_then(|s| s.get("title"))
-                        .and_then(|t| t.as_str())
-                })
-            {
+            if let Some(page) = wd.get_item(q).and_then(|item| {
+                item.raw
+                    .get("sitelinks")
+                    .and_then(|s| s.get(&wiki))
+                    .and_then(|s| s.get("title"))
+                    .and_then(|t| t.as_str())
+            }) {
                 let encoded = urlencoding::encode(&page.replace(' ', "_")).to_string();
                 format!(
                     "<a href='https://{lang}.wikipedia.org/wiki/{page}'{lt}>{label}</a>",
@@ -440,8 +478,7 @@ fn add_qualifier_items(claims: &Value, prop: &str, qual_prop: &str, items: &mut 
 /// Get the first claim target item Q-id for a property.
 pub(super) fn get_first_claim_item(claims: &Value, prop: &str) -> Option<String> {
     let arr = claims.get(prop)?.as_array()?;
-    arr.first()
-        .and_then(WikiDataItem::get_claim_target_item_id)
+    arr.first().and_then(WikiDataItem::get_claim_target_item_id)
 }
 
 /// Get all claim target item Q-ids for a property.
@@ -479,14 +516,12 @@ pub(super) fn get_dated_items(
 
         let date_from = qualifiers.and_then(|qs| {
             // Try P581 (point in time) first, then P580 (start time)
-            extract_date_qualifier(qs, "P581")
-                .or_else(|| extract_date_qualifier(qs, "P580"))
+            extract_date_qualifier(qs, "P581").or_else(|| extract_date_qualifier(qs, "P580"))
         });
 
         let date_to = qualifiers.and_then(|qs| {
             // Try P581 first, then P582 (end time)
-            extract_date_qualifier(qs, "P581")
-                .or_else(|| extract_date_qualifier(qs, "P582"))
+            extract_date_qualifier(qs, "P581").or_else(|| extract_date_qualifier(qs, "P582"))
         });
 
         let mut qualifier_items: HashMap<String, Vec<String>> = HashMap::new();
@@ -513,7 +548,12 @@ pub(super) fn get_dated_items(
             }
         }
 
-        result.push(DatedItem { q, date_from, date_to, qualifier_items });
+        result.push(DatedItem {
+            q,
+            date_from,
+            date_to,
+            qualifier_items,
+        });
     }
 
     // Sort by date

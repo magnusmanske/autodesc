@@ -120,7 +120,7 @@ fn insert_item_json(wd: &mut WikiData, id: &str, raw: Value) {
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 /// English long description for a deceased male writer — smoke test.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_en_male_writer_deceased() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -160,7 +160,7 @@ async fn test_long_desc_en_male_writer_deceased() {
 }
 
 /// For a living female person, "is" (not "was") and female pronouns are used.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_en_female_alive() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -200,7 +200,7 @@ async fn test_long_desc_en_female_alive() {
 }
 
 /// Non-person items return None.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_returns_none_for_non_person() {
     let mock_server = MockServer::start().await;
     // The mock should never be called since we bail out early
@@ -226,7 +226,7 @@ async fn test_long_desc_returns_none_for_non_person() {
 }
 
 /// Unsupported language returns None.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_returns_none_for_unsupported_lang() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -251,7 +251,7 @@ async fn test_long_desc_returns_none_for_unsupported_lang() {
 }
 
 /// Dutch long description uses Dutch pronouns and month names.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_nl() {
     let dutch_entities = json!({
         "Q145": {
@@ -327,7 +327,7 @@ async fn test_long_desc_nl() {
 }
 
 /// French long description uses French pronouns.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_fr() {
     let french_entities = json!({
         "Q145": {
@@ -398,7 +398,7 @@ async fn test_long_desc_fr() {
 }
 
 /// With `links=wikidata`, item references are wrapped in wikidata.org anchor tags.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_link_mode_wikidata() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -432,7 +432,7 @@ async fn test_long_desc_link_mode_wikidata() {
 }
 
 /// With `links=wiki`, item references become wikitext-style `[[...]]` links.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_link_mode_wiki() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -470,7 +470,7 @@ async fn test_long_desc_link_mode_wiki() {
 }
 
 /// With `links=wikipedia`, item references become Wikipedia HTML anchor tags.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_link_mode_wikipedia() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -504,7 +504,7 @@ async fn test_long_desc_link_mode_wikipedia() {
 }
 
 /// Multiple occupations are listed with "and" between the last two.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_multiple_occupations() {
     let entities = json!({
         "Q36180": fake_item("Q36180", "writer"),
@@ -551,7 +551,7 @@ async fn test_long_desc_multiple_occupations() {
 }
 
 /// A person with no birth/death/occupation claims still gets a description.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_minimal_person() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -584,7 +584,7 @@ async fn test_long_desc_minimal_person() {
 }
 
 /// P107=Q215627 (person) also qualifies for long description (alternative P31 path).
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_p107_person() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -615,7 +615,7 @@ async fn test_long_desc_p107_person() {
 }
 
 /// Batch load is called once even when claims reference many items.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_batch_load_called() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -655,7 +655,7 @@ fn test_is_long_desc_available() {
 }
 
 /// `load_item` with `mode=long` produces a long description for a person.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_load_item_long_mode() {
     let mock_server = MockServer::start().await;
 
