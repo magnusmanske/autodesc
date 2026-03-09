@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AutoDesc - Wikidata automated description API</title>
+<style>
+body { font-family: sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; }
+h1 { color: #006699; }
+form { background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0; }
+label { display: inline-block; width: 120px; font-weight: bold; }
+input, select { margin: 4px 0; }
+.examples { margin-top: 20px; }
+.examples a { display: block; margin: 4px 0; }
+</style>
+</head>
+<body>
+<h1>AutoDesc - Wikidata automated description API</h1>
+<p>This API can describe most Wikidata items automatically. For some item types (e.g. biographies) in some languages, long descriptions are available.
+<a href='http://magnusmanske.de/wordpress/?p=265'>Blog entry,</a>
+<a href='https://github.com/magnusmanske/autodesc'>code repo</a>
+<!--,<a href='https://tooltranslate.toolforge.org//#tool=27'>translations</a>-->
+.</p>
+<form method="get" action="/">
+<div><label>Q</label> <input type="text" name="q" placeholder="Q42" size="10"></div>
+<div><label>Language</label> <input type="text" name="lang" value="en" size="5"></div>
+<div><label>Mode</label>
+  <input type="radio" name="mode" value="short" checked> short
+  <input type="radio" name="mode" value="long"> long description (where possible)
+</div>
+<div><label>Links</label>
+  <select name="links">
+    <option value="text">plain text</option>
+    <option value="wikidata">HTML/Wikidata</option>
+    <option value="wikipedia">HTML/Wikipedia</option>
+    <option value="wiki">Wikitext/Wikipedia</option>
+    <option value="reasonator">HTML/Reasonator</option>
+  </select>
+</div>
+<div><label>Format</label>
+  <select name="format">
+    <option value="jsonfm">Pretty JSON</option>
+    <option value="json">JSON (takes &amp;callback)</option>
+    <option value="html">HTML page</option>
+  </select>
+</div>
+<div><label>Media</label>
+  <input type="checkbox" name="media" value="1"> Include media info
+</div>
+<div style="margin-top: 10px;"><input type="submit" value="Generate"></div>
+</form>
+<div class="examples">
+<h3>Examples:</h3>
+<a href="/?q=Q1339&lang=en&mode=long&links=wikipedia&format=html&redlinks=reasonator">Long English description of J.S.Bach, as a HTML page linking to English Wikipedia</a>
+<a href="/?q=Q42&lang=en&mode=short&links=text&format=json">Douglas Adams, short description, plain text, JSON</a>
+<a href="/?q=Q12345&lang=en&links=wikidata&format=json">Count von Count, wikidata links, JSON</a>
+</div>
+</body>
+</html>
