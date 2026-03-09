@@ -109,8 +109,56 @@ impl LangGenerator for LangFr {
 
         state.push_text(". ");
 
-        if nationalities.is_empty() && occupations.is_empty() {
+        let has_first_sentence = !nationalities.is_empty() || !occupations.is_empty();
+        if !has_first_sentence {
             state.fragments.truncate(initial_len);
+        }
+
+        // Période de travail (P1317: floruit, P2031: début, P2032: fin)
+        let floruit = claims
+            .get("P1317")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|c| extract_claim_date(c));
+        let work_start = claims
+            .get("P2031")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|c| extract_claim_date(c));
+        let work_end = claims
+            .get("P2032")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|c| extract_claim_date(c));
+        if floruit.is_some() || work_start.is_some() || work_end.is_some() {
+            let subj = state.pronoun_subject(&CFG);
+            let active_adj = if state.is_female { "active" } else { "actif" };
+            let bare_year =
+                |d: &WdDate| parse_time(&d.time).map(|(_, y, _, _)| y.to_string()).unwrap_or_default();
+            if let Some(ref date) = floruit {
+                state.push_text(&format!("{} était {} vers {}",subj, active_adj, bare_year(date)));
+            } else if work_start.is_some() && work_end.is_some() {
+                let from = work_start.as_ref().unwrap();
+                let to = work_end.as_ref().unwrap();
+                state.push_text(&format!(
+                    "{} était {} de {} à {}",
+                    subj,
+                    active_adj,
+                    bare_year(from),
+                    bare_year(to)
+                ));
+            } else if let Some(ref from) = work_start {
+                state.push_text(&format!(
+                    "{} était {} à partir de {}",
+                    subj,
+                    active_adj,
+                    bare_year(from)
+                ));
+            } else if let Some(ref to) = work_end {
+                state.push_text(&format!("{} était {} ", subj, active_adj));
+                state.push_text(&self.render_date(to, true));
+            }
+            state.push_text(". ");
         }
 
         // Significant events

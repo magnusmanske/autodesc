@@ -110,8 +110,46 @@ impl LangGenerator for LangEn {
 
         state.push_text(". ");
 
-        if nationalities.is_empty() && occupations.is_empty() {
+        let has_first_sentence = !nationalities.is_empty() || !occupations.is_empty();
+        if !has_first_sentence {
             state.fragments.truncate(initial_len);
+        }
+
+        // Work period (P1317: floruit, P2031: work start, P2032: work end)
+        let floruit = claims
+            .get("P1317")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|c| extract_claim_date(c));
+        let work_start = claims
+            .get("P2031")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|c| extract_claim_date(c));
+        let work_end = claims
+            .get("P2032")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|c| extract_claim_date(c));
+        if floruit.is_some() || work_start.is_some() || work_end.is_some() {
+            let subj = state.pronoun_subject(&CFG);
+            let poss = state.pronoun_possessive(&CFG);
+            if let Some(ref date) = floruit {
+                state.push_text(&format!("{} was professionally active around ", subj));
+                state.push_text(&self.render_date(date, true));
+            } else if work_start.is_some() && work_end.is_some() {
+                state.push_text(&format!("{} professional career spanned from ", poss));
+                state.push_text(&self.render_date(work_start.as_ref().unwrap(), true));
+                state.push_text(" to ");
+                state.push_text(&self.render_date(work_end.as_ref().unwrap(), true));
+            } else if let Some(ref from) = work_start {
+                state.push_text(&format!("{} was professionally active from ", subj));
+                state.push_text(&self.render_date(from, true));
+            } else if let Some(ref to) = work_end {
+                state.push_text(&format!("{} was professionally active until ", subj));
+                state.push_text(&self.render_date(to, true));
+            }
+            state.push_text(". ");
         }
 
         // Significant events

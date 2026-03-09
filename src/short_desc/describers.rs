@@ -148,6 +148,16 @@ impl ShortDescription {
             h.push(self.txt("person", lang));
         }
 
+        // Work period (P1317: floruit/active around, P2031: work start, P2032: work end)
+        let floruit = WikiData::get_year(claims, 1317, lang, &self.stock);
+        let work_start = WikiData::get_year(claims, 2031, lang, &self.stock);
+        let work_end = WikiData::get_year(claims, 2032, lang, &self.stock);
+        if !floruit.is_empty() {
+            h.push(format!("(active c. {})", floruit));
+        } else if !work_start.is_empty() || !work_end.is_empty() {
+            h.push(format!("(fl. {}–{})", work_start, work_end));
+        }
+
         // Office
         let office_hints = WordHints {
             is_male,
