@@ -1,6 +1,14 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
+/// Gender and context hints used by word-modification and list-joining helpers.
+#[derive(Debug, Clone, Default)]
+pub struct WordHints {
+    pub is_female: bool,
+    pub is_male: bool,
+    pub occupation: bool,
+}
+
 use regex::Regex;
 
 use crate::desc_options::DescOptions;
@@ -37,7 +45,7 @@ fn clean_space_comma_re() -> &'static Regex {
 /// Bundling them reduces the argument count below the clippy `too_many_arguments` threshold.
 struct Add2DescArgs<'a> {
     props: &'a [u64],
-    hints: &'a HashMap<String, bool>,
+    hints: &'a WordHints,
     prefix: Option<&'a str>,
     txt_key: Option<&'a str>,
 }
@@ -99,34 +107,24 @@ impl ShortDescription {
         text.to_string()
     }
 
-    /// Check if hints indicate female gender.
-    fn is_female(hints: &HashMap<String, bool>) -> bool {
-        hints.get("is_female").copied().unwrap_or(false)
-    }
-
-    /// Check if hints indicate male gender.
-    fn is_male(hints: &HashMap<String, bool>) -> bool {
-        hints.get("is_male").copied().unwrap_or(false)
-    }
-
     /// Modify a word based on gender hints and language.
-    pub fn modify_word(&self, word: &str, hints: &HashMap<String, bool>, lang: &str) -> String {
+    pub fn modify_word(&self, word: &str, hints: &WordHints, lang: &str) -> String {
         let lower = word.to_lowercase();
         match lang {
             "en" => {
-                if Self::is_female(hints) {
+                if hints.is_female {
                     if lower == "actor" {
                         return "actress".to_string();
                     }
                     if lower == "actor / actress" {
                         return "actress".to_string();
                     }
-                } else if Self::is_male(hints) && lower == "actor / actress" {
+                } else if hints.is_male && lower == "actor / actress" {
                     return "actor".to_string();
                 }
             }
             "fr" => {
-                if Self::is_female(hints) {
+                if hints.is_female {
                     if lower == "acteur" {
                         return "actrice".to_string();
                     }
@@ -136,7 +134,7 @@ impl ShortDescription {
                 }
             }
             "de" => {
-                if Self::is_female(hints) && hints.get("occupation").copied().unwrap_or(false) {
+                if hints.is_female && hints.occupation {
                     return format!("{}in", word);
                 }
             }
@@ -146,12 +144,7 @@ impl ShortDescription {
     }
 
     /// Join a list of words with the appropriate conjunction for the given language.
-    pub fn list_words(
-        &self,
-        original_list: &[String],
-        hints: &HashMap<String, bool>,
-        lang: &str,
-    ) -> String {
+    pub fn list_words(&self, original_list: &[String], hints: &WordHints, lang: &str) -> String {
         let mut list: Vec<String> = original_list
             .iter()
             .map(|w| self.modify_word(w, hints, lang))
@@ -474,8 +467,8 @@ impl ShortDescription {
 
         if let Some(pfx) = args.prefix {
             if !h.is_empty() {
-                let last_idx = h.len() - 1;
-                h[last_idx].push_str(pfx);
+                let last = h.len() - 1;
+                h[last].push_str(pfx);
             }
         }
 
@@ -623,14 +616,11 @@ impl ShortDescription {
 
         // Occupation
         let ol = h.len();
-        let mut hints = HashMap::new();
-        if is_male {
-            hints.insert("is_male".to_string(), true);
-        }
-        if is_female {
-            hints.insert("is_female".to_string(), true);
-        }
-        hints.insert("occupation".to_string(), true);
+        let hints = WordHints {
+            is_male,
+            is_female,
+            occupation: true,
+        };
         self.add2desc(
             &mut h,
             &item_labels,
@@ -647,15 +637,10 @@ impl ShortDescription {
         }
 
         // Office
-        let office_hints = {
-            let mut oh = HashMap::new();
-            if is_male {
-                oh.insert("is_male".to_string(), true);
-            }
-            if is_female {
-                oh.insert("is_female".to_string(), true);
-            }
-            oh
+        let office_hints = WordHints {
+            is_male,
+            is_female,
+            ..Default::default()
         };
         self.add2desc(
             &mut h,
@@ -689,7 +674,7 @@ impl ShortDescription {
         }
 
         // Awards
-        let empty_hints = HashMap::new();
+        let empty_hints = WordHints::default();
         self.add2desc(
             &mut h,
             &item_labels,
@@ -952,7 +937,7 @@ impl ShortDescription {
 
         let item_labels = self.label_items(&load_items, opt, wd).await;
         let lang = &opt.lang;
-        let empty_hints = HashMap::new();
+        let empty_hints = WordHints::default();
         let mut h: Vec<String> = Vec::new();
 
         // Publication date
@@ -1250,7 +1235,7 @@ mod tests {
     #[test]
     fn test_list_words() {
         let sd = ShortDescription::new();
-        let empty: HashMap<String, bool> = HashMap::new();
+        let empty = WordHints::default();
         assert_eq!(sd.list_words(&["one".to_string()], &empty, "en"), "one");
         assert_eq!(
             sd.list_words(&["one".to_string(), "two".to_string()], &empty, "en"),

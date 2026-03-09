@@ -1,5 +1,5 @@
 use autodesc::desc_options::DescOptions;
-use autodesc::short_desc::ShortDescription;
+use autodesc::short_desc::{ShortDescription, WordHints};
 use autodesc::wikidata::WikiData;
 
 /// Test that the ShortDescription can generate a description for a known person (Q42 = Douglas Adams).
@@ -243,7 +243,7 @@ fn test_stock_translations_completeness() {
 #[test]
 fn test_list_words_multilingual() {
     let sd = ShortDescription::new();
-    let empty = std::collections::HashMap::new();
+    let empty = WordHints::default();
 
     // French
     assert_eq!(
@@ -281,11 +281,14 @@ fn test_list_words_multilingual() {
 fn test_modify_word_gender() {
     let sd = ShortDescription::new();
 
-    let mut female_hints = std::collections::HashMap::new();
-    female_hints.insert("is_female".to_string(), true);
-
-    let mut male_hints = std::collections::HashMap::new();
-    male_hints.insert("is_male".to_string(), true);
+    let female_hints = WordHints {
+        is_female: true,
+        ..Default::default()
+    };
+    let male_hints = WordHints {
+        is_male: true,
+        ..Default::default()
+    };
 
     // English
     assert_eq!(sd.modify_word("actor", &female_hints, "en"), "actress");
@@ -306,9 +309,11 @@ fn test_modify_word_gender() {
     );
 
     // German with occupation hint
-    let mut de_female = std::collections::HashMap::new();
-    de_female.insert("is_female".to_string(), true);
-    de_female.insert("occupation".to_string(), true);
+    let de_female = WordHints {
+        is_female: true,
+        occupation: true,
+        ..Default::default()
+    };
     assert_eq!(sd.modify_word("Arzt", &de_female, "de"), "Arztin");
 }
 
