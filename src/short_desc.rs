@@ -1,8 +1,39 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 
 use regex::Regex;
 
-use crate::wikidata::{sanitize_q, WikiData, WikiDataItem};
+use crate::wikidata::{sanitize_q, WikiData, WikiDataItem, MAIN_LANGUAGES};
+
+fn split_link_wiki_pipe_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^(\[\[.+\|)(.+)(\]\])$").expect("regex is valid"))
+}
+
+fn split_link_wiki_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^(\[\[)(.+)(\]\])$").expect("regex is valid"))
+}
+
+fn split_link_html_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^(<a.+?>)(.+)(</a>)$").expect("regex is valid"))
+}
+
+fn txt2_link_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^(<a.+?>)(.+)(</a>)$").expect("regex is valid"))
+}
+
+fn clean_spaces_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r" +").expect("regex is valid"))
+}
+
+fn clean_space_comma_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r" ,").expect("regex is valid"))
+}
 
 /// Options passed to the description generator.
 #[derive(Debug, Clone)]
@@ -46,12 +77,7 @@ impl ShortDescription {
         Self {
             stock,
             language_specific: HashMap::new(),
-            main_languages: vec![
-                "en", "de", "fr", "es", "it", "pl", "pt", "ja", "ru", "hu", "nl", "sv", "fi",
-            ]
-            .into_iter()
-            .map(String::from)
-            .collect(),
+            main_languages: MAIN_LANGUAGES.iter().map(|s| s.to_string()).collect(),
         }
     }
 
@@ -73,7 +99,7 @@ impl ShortDescription {
         if let Some(lang_spec) = self.language_specific.get(lang) {
             if let Some(key_map) = lang_spec.get(key) {
                 // Try to extract inner text from an HTML link
-                let link_re = Regex::new(r"^(<a.+?>)(.+)(</a>)$").unwrap();
+                let link_re = txt2_link_re();
                 if let Some(caps) = link_re.captures(text) {
                     let inner = caps.get(2).unwrap().as_str();
                     if let Some(replacement) = key_map.get(inner) {
@@ -242,23 +268,24 @@ impl ShortDescription {
         for v in claims_arr {
             let mainsnak = match v.get("mainsnak") {
                 Some(ms) => ms,
-                None => return,
+                None => continue,
             };
             let datavalue = match mainsnak.get("datavalue") {
                 Some(dv) => dv,
-                None => return,
+                None => continue,
             };
             let value = match datavalue.get("value") {
                 Some(val) => val,
-                None => return,
+                None => continue,
             };
 
+            // Prefer the string "id" field (newer format), fall back to numeric-id
             if let Some(id) = value.get("id").and_then(|i| i.as_str()) {
                 items.push((p, id.to_string()));
-            } else {
-                // Property item reference
-                items.push((p, format!("P{}", p)));
+            } else if let Some(numeric_id) = value.get("numeric-id").and_then(|n| n.as_u64()) {
+                items.push((p, format!("Q{}", numeric_id)));
             }
+            // If neither field is present this is not an item value; skip it.
         }
     }
 
@@ -275,16 +302,17 @@ impl ShortDescription {
 
         let use_lang = &opt.lang;
 
-        // Collect all entity IDs to load
+        // Collect all entity IDs to load, deduplicated in O(n) with a HashSet
+        let mut seen: HashSet<String> = HashSet::new();
         let mut ids: Vec<String> = Vec::new();
         for (p, qid) in items {
             if *p != 0 {
                 let prop_id = format!("P{}", p);
-                if !ids.contains(&prop_id) {
+                if seen.insert(prop_id.clone()) {
                     ids.push(prop_id);
                 }
             }
-            if !ids.contains(qid) {
+            if seen.insert(qid.clone()) {
                 ids.push(qid.clone());
             }
         }
@@ -497,8 +525,7 @@ impl ShortDescription {
     /// Split a link string into parts: (full_match, before, inner_text, after).
     fn split_link(v: &str) -> (String, String, String, String) {
         // Try wiki link: [[...|text]] or [[text]]
-        let wiki_pipe_re = Regex::new(r"^(\[\[.+\|)(.+)(\]\])$").unwrap();
-        if let Some(caps) = wiki_pipe_re.captures(v) {
+        if let Some(caps) = split_link_wiki_pipe_re().captures(v) {
             return (
                 caps.get(0).unwrap().as_str().to_string(),
                 caps.get(1).unwrap().as_str().to_string(),
@@ -507,8 +534,7 @@ impl ShortDescription {
             );
         }
 
-        let wiki_re = Regex::new(r"^(\[\[)(.+)(\]\])$").unwrap();
-        if let Some(caps) = wiki_re.captures(v) {
+        if let Some(caps) = split_link_wiki_re().captures(v) {
             let inner = caps.get(2).unwrap().as_str();
             return (
                 caps.get(0).unwrap().as_str().to_string(),
@@ -519,8 +545,7 @@ impl ShortDescription {
         }
 
         // Try HTML link
-        let html_re = Regex::new(r"^(<a.+?>)(.+)(</a>)$").unwrap();
-        if let Some(caps) = html_re.captures(v) {
+        if let Some(caps) = split_link_html_re().captures(v) {
             return (
                 caps.get(0).unwrap().as_str().to_string(),
                 caps.get(1).unwrap().as_str().to_string(),
@@ -1181,10 +1206,8 @@ fn wiki_urlencode(s: &str) -> String {
 
 /// Clean up extra spaces and punctuation artifacts.
 fn clean_spaces(s: &str) -> String {
-    let re_spaces = Regex::new(r" +").unwrap();
-    let re_space_comma = Regex::new(r" ,").unwrap();
-    let result = re_spaces.replace_all(s, " ");
-    let result = re_space_comma.replace_all(&result, ",");
+    let result = clean_spaces_re().replace_all(s, " ");
+    let result = clean_space_comma_re().replace_all(&result, ",");
     result.trim().to_string()
 }
 
@@ -1260,6 +1283,86 @@ mod tests {
         assert!(ShortDescription::has_pq(&claims, 31, 5));
         assert!(!ShortDescription::has_pq(&claims, 31, 42));
         assert!(!ShortDescription::has_pq(&claims, 99, 5));
+    }
+
+    #[test]
+    fn test_add_items_from_claims_uses_continue_not_return() {
+        // This test verifies that a missing mainsnak in one claim does NOT
+        // prevent subsequent claims in the same property from being processed.
+        let claims = serde_json::json!({
+            "P106": [
+                {
+                    // First claim is missing "mainsnak" entirely
+                },
+                {
+                    "mainsnak": {
+                        "datavalue": {
+                            "value": { "id": "Q36180" }
+                        }
+                    }
+                }
+            ]
+        });
+
+        let mut items: Vec<(u64, String)> = Vec::new();
+        ShortDescription::add_items_from_claims(&claims, 106, &mut items);
+        // The second valid claim should still be collected
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].1, "Q36180");
+    }
+
+    #[test]
+    fn test_add_items_from_claims_numeric_id_fallback() {
+        // Ensure numeric-id is used when "id" is absent
+        let claims = serde_json::json!({
+            "P31": [{
+                "mainsnak": {
+                    "datavalue": {
+                        "value": {
+                            "entity-type": "item",
+                            "numeric-id": 5
+                        }
+                    }
+                }
+            }]
+        });
+
+        let mut items: Vec<(u64, String)> = Vec::new();
+        ShortDescription::add_items_from_claims(&claims, 31, &mut items);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].1, "Q5");
+    }
+
+    #[test]
+    fn test_add_items_from_claims_no_id_no_numeric_id_skipped() {
+        // When neither "id" nor "numeric-id" is present, the claim should be skipped
+        // (not push a spurious "P<n>" string).
+        let claims = serde_json::json!({
+            "P31": [{
+                "mainsnak": {
+                    "datavalue": {
+                        "value": { "time": "+2020-01-01T00:00:00Z" }
+                    }
+                }
+            }]
+        });
+
+        let mut items: Vec<(u64, String)> = Vec::new();
+        ShortDescription::add_items_from_claims(&claims, 31, &mut items);
+        assert!(
+            items.is_empty(),
+            "Non-item values should not produce entries"
+        );
+    }
+
+    #[test]
+    fn test_clean_spaces() {
+        // clean_spaces is private but we can test it indirectly via describe results;
+        // test it directly here to ensure the cached regex works correctly.
+        // We use a workaround: call it through the module since it's in the same file.
+        assert_eq!(clean_spaces("hello  world"), "hello world");
+        assert_eq!(clean_spaces("foo ,bar"), "foo,bar");
+        assert_eq!(clean_spaces("  trim  "), "trim");
     }
 
     #[test]

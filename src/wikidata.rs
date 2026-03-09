@@ -1,7 +1,19 @@
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
 use regex::Regex;
 use reqwest::Client;
 use serde_json::Value;
-use std::collections::HashMap;
+
+/// Languages tried in order when no specific language is requested.
+pub const MAIN_LANGUAGES: &[&str] = &[
+    "en", "de", "fr", "nl", "es", "it", "pl", "pt", "ja", "ru", "hu", "sv", "fi",
+];
+
+fn year_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^([+-])0*(\d+)").expect("year regex is valid"))
+}
 
 /// Represents a single Wikidata entity with helper methods for extracting data.
 #[derive(Debug, Clone)]
@@ -41,9 +53,6 @@ impl WikiDataItem {
 
     pub fn get_label(&self, language: Option<&str>) -> String {
         let fallback = self.get_id();
-        let main_languages = [
-            "en", "de", "fr", "nl", "es", "it", "pl", "pt", "ja", "ru", "hu", "sv", "fi",
-        ];
 
         if let Some(lang) = language {
             if let Some(label) = self
@@ -59,7 +68,7 @@ impl WikiDataItem {
         }
 
         // No language specified: try main languages, then any
-        for lang in &main_languages {
+        for lang in MAIN_LANGUAGES {
             if let Some(label) = self
                 .raw
                 .get("labels")
@@ -84,10 +93,6 @@ impl WikiDataItem {
     }
 
     pub fn get_desc(&self, language: Option<&str>) -> String {
-        let main_languages = [
-            "en", "de", "fr", "nl", "es", "it", "pl", "pt", "ja", "ru", "hu", "sv", "fi",
-        ];
-
         if let Some(lang) = language {
             return self
                 .raw
@@ -99,7 +104,7 @@ impl WikiDataItem {
                 .to_string();
         }
 
-        for lang in &main_languages {
+        for lang in MAIN_LANGUAGES {
             let desc = self
                 .raw
                 .get("descriptions")
@@ -178,25 +183,17 @@ impl WikiDataItem {
     }
 
     pub fn get_claim_items_for_property(&self, p: &str) -> Vec<String> {
-        let claims = self.get_claims_for_property(p);
-        let mut ret = Vec::new();
-        for claim in &claims {
-            if let Some(q) = Self::get_claim_target_item_id(claim) {
-                ret.push(q);
-            }
-        }
-        ret
+        self.get_claims_for_property(p)
+            .iter()
+            .filter_map(Self::get_claim_target_item_id)
+            .collect()
     }
 
     pub fn get_strings_for_property(&self, p: &str) -> Vec<String> {
-        let claims = self.get_claims_for_property(p);
-        let mut ret = Vec::new();
-        for claim in &claims {
-            if let Some(s) = Self::get_claim_target_string(claim) {
-                ret.push(s);
-            }
-        }
-        ret
+        self.get_claims_for_property(p)
+            .iter()
+            .filter_map(Self::get_claim_target_string)
+            .collect()
     }
 
     pub fn get_wiki_links(&self) -> HashMap<String, Value> {
@@ -401,7 +398,7 @@ impl WikiData {
             None => return String::new(),
         };
 
-        let re = Regex::new(r"^([+-])0*(\d+)").unwrap();
+        let re = year_regex();
 
         for claim in claims_arr {
             let time_str = claim
@@ -457,6 +454,174 @@ mod tests {
         assert_eq!(unified_id("Q 42"), "Q42");
     }
 
+    #[test]
+    fn test_get_best_quantity_millions() {
+        let claims = serde_json::json!([{
+            "mainsnak": {
+                "datavalue": {
+                    "value": { "amount": "+1500000" }
+                }
+            }
+        }]);
+        let arr = claims.as_array().unwrap();
+        assert_eq!(
+            WikiDataItem::get_best_quantity(arr),
+            Some("1.5M".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_best_quantity_integer() {
+        let claims = serde_json::json!([{
+            "mainsnak": {
+                "datavalue": {
+                    "value": { "amount": "+42" }
+                }
+            }
+        }]);
+        let arr = claims.as_array().unwrap();
+        assert_eq!(WikiDataItem::get_best_quantity(arr), Some("42".to_string()));
+    }
+
+    #[test]
+    fn test_get_best_quantity_empty() {
+        assert_eq!(WikiDataItem::get_best_quantity(&[]), None);
+    }
+
+    #[test]
+    fn test_get_year_bc() {
+        use std::collections::HashMap;
+        let mut stock: HashMap<String, HashMap<String, String>> = HashMap::new();
+        let mut bc_map = HashMap::new();
+        bc_map.insert("en".to_string(), " BC".to_string());
+        stock.insert("BC".to_string(), bc_map);
+
+        let claims = serde_json::json!({
+            "P569": [{
+                "mainsnak": {
+                    "datavalue": {
+                        "value": { "time": "-00000384-00-00T00:00:00Z" }
+                    }
+                }
+            }]
+        });
+        let year = WikiData::get_year(&claims, 569, "en", &stock);
+        assert_eq!(year, "384 BC");
+    }
+
+    #[test]
+    fn test_get_year_ad() {
+        let stock = HashMap::new();
+        let claims = serde_json::json!({
+            "P569": [{
+                "mainsnak": {
+                    "datavalue": {
+                        "value": { "time": "+1952-03-11T00:00:00Z" }
+                    }
+                }
+            }]
+        });
+        let year = WikiData::get_year(&claims, 569, "en", &stock);
+        assert_eq!(year, "1952");
+    }
+
+    #[test]
+    fn test_get_year_missing_prop() {
+        let stock = HashMap::new();
+        let claims = serde_json::json!({});
+        let year = WikiData::get_year(&claims, 569, "en", &stock);
+        assert_eq!(year, "");
+    }
+
+    #[test]
+    fn test_get_claim_target_item_id_with_id_field() {
+        let claim = serde_json::json!({
+            "mainsnak": {
+                "datavalue": {
+                    "value": {
+                        "entity-type": "item",
+                        "id": "Q42"
+                    }
+                }
+            }
+        });
+        assert_eq!(
+            WikiDataItem::get_claim_target_item_id(&claim),
+            Some("Q42".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_claim_target_item_id_with_numeric_id() {
+        let claim = serde_json::json!({
+            "mainsnak": {
+                "datavalue": {
+                    "value": {
+                        "entity-type": "item",
+                        "numeric-id": 42
+                    }
+                }
+            }
+        });
+        assert_eq!(
+            WikiDataItem::get_claim_target_item_id(&claim),
+            Some("Q42".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_claim_target_item_id_wrong_entity_type() {
+        let claim = serde_json::json!({
+            "mainsnak": {
+                "datavalue": {
+                    "value": {
+                        "entity-type": "property",
+                        "id": "P31"
+                    }
+                }
+            }
+        });
+        assert_eq!(WikiDataItem::get_claim_target_item_id(&claim), None);
+    }
+
+    #[test]
+    fn test_placeholder() {
+        let item = WikiDataItem::placeholder();
+        assert!(item.is_placeholder());
+        assert_eq!(item.get_id(), "");
+        assert_eq!(item.get_label(None), "");
+        assert!(!item.has_claims("P31"));
+    }
+
+    #[test]
+    fn test_get_claim_target_string() {
+        let claim = serde_json::json!({
+            "mainsnak": {
+                "datavalue": {
+                    "type": "string",
+                    "value": "hello"
+                }
+            }
+        });
+        assert_eq!(
+            WikiDataItem::get_claim_target_string(&claim),
+            Some("hello".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_claim_target_string_wrong_type() {
+        let claim = serde_json::json!({
+            "mainsnak": {
+                "datavalue": {
+                    "type": "wikibase-entityid",
+                    "value": { "entity-type": "item", "id": "Q42" }
+                }
+            }
+        });
+        assert_eq!(WikiDataItem::get_claim_target_string(&claim), None);
+    }
+
     #[tokio::test]
     async fn test_load_entity() {
         let mut wd = WikiData::new();
@@ -488,14 +653,5 @@ mod tests {
         wd.get_item_batch(&items).await.unwrap();
         assert!(wd.has_item("Q42"));
         assert!(wd.has_item("Q1"));
-    }
-
-    #[test]
-    fn test_placeholder() {
-        let item = WikiDataItem::placeholder();
-        assert!(item.is_placeholder());
-        assert_eq!(item.get_id(), "");
-        assert_eq!(item.get_label(None), "");
-        assert!(!item.has_claims("P31"));
     }
 }

@@ -41,6 +41,7 @@ dependencies = [
  "anyhow",
  "axum",
  "html-escape",
+ "once_cell",
  "regex",
  "reqwest",
  "serde",
