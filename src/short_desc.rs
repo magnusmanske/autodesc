@@ -16,12 +16,9 @@ fn split_link_wiki_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"^(\[\[)(.+)(\]\])$").expect("regex is valid"))
 }
 
-fn split_link_html_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^(<a.+?>)(.+)(</a>)$").expect("regex is valid"))
-}
-
-fn txt2_link_re() -> &'static Regex {
+/// Matches an HTML anchor tag: captures (opening tag, inner text, closing tag).
+/// Shared by split_link and txt2.
+fn html_link_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"^(<a.+?>)(.+)(</a>)$").expect("regex is valid"))
 }
@@ -74,7 +71,7 @@ impl ShortDescription {
         if let Some(lang_spec) = self.language_specific.get(lang) {
             if let Some(key_map) = lang_spec.get(key) {
                 // Try to extract inner text from an HTML link
-                let link_re = txt2_link_re();
+                let link_re = html_link_re();
                 if let Some(caps) = link_re.captures(text) {
                     let inner = caps.get(2).unwrap().as_str();
                     if let Some(replacement) = key_map.get(inner) {
@@ -520,7 +517,7 @@ impl ShortDescription {
         }
 
         // Try HTML link
-        if let Some(caps) = split_link_html_re().captures(v) {
+        if let Some(caps) = html_link_re().captures(v) {
             return (
                 caps.get(0).unwrap().as_str().to_string(),
                 caps.get(1).unwrap().as_str().to_string(),
