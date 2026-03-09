@@ -1,78 +1,15 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
-
-/// Gender and context hints used by word-modification and list-joining helpers.
-#[derive(Debug, Clone, Default)]
-pub struct WordHints {
-    pub is_female: bool,
-    pub is_male: bool,
-    pub occupation: bool,
-}
-
-use regex::Regex;
+use std::collections::HashMap;
 
 use crate::desc_options::DescOptions;
-use crate::wikidata::{sanitize_q, WikiData, WikiDataItem};
+use crate::wikidata::{sanitize_q, WikiData};
 
-/// Maps a taxon-rank Q-id string to its index in the taxa_cache array.
-/// Returns `None` for unrecognised ranks.
-fn taxon_rank_index(q: &str) -> Option<usize> {
-    match q {
-        "Q767728" => Some(0), // variety
-        "Q68947" => Some(1),  // subspecies
-        "Q7432" => Some(2),   // species
-        "Q34740" => Some(3),  // genus
-        "Q35409" => Some(4),  // family
-        "Q36602" => Some(5),  // order
-        "Q37517" => Some(6),  // class
-        "Q38348" => Some(7),  // phylum
-        "Q36732" => Some(8),  // kingdom
-        _ => None,
-    }
-}
+mod claims;
+mod describers;
+mod labeler;
+mod word_helpers;
 
-fn entity_url_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^.+?entity/").expect("regex is valid"))
-}
+pub use word_helpers::WordHints;
 
-fn split_link_wiki_pipe_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^(\[\[.+\|)(.+)(\]\])$").expect("regex is valid"))
-}
-
-fn split_link_wiki_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^(\[\[)(.+)(\]\])$").expect("regex is valid"))
-}
-
-/// Matches an HTML anchor tag: captures (opening tag, inner text, closing tag).
-/// Shared by split_link and txt2.
-fn html_link_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^(<a.+?>)(.+)(</a>)$").expect("regex is valid"))
-}
-
-fn clean_spaces_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r" +").expect("regex is valid"))
-}
-
-fn clean_space_comma_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r" ,").expect("regex is valid"))
-}
-
-/// Arguments for [`ShortDescription::add2desc`].
-/// Bundling them reduces the argument count below the clippy `too_many_arguments` threshold.
-struct Add2DescArgs<'a> {
-    props: &'a [u64],
-    hints: &'a WordHints,
-    prefix: Option<&'a str>,
-    txt_key: Option<&'a str>,
-}
-
-/// The short description generator, ported from the Python `ShortDescription` class.
 pub struct ShortDescription {
     pub stock: HashMap<String, HashMap<String, String>>,
     pub language_specific: HashMap<String, HashMap<String, HashMap<String, String>>>,
@@ -101,458 +38,6 @@ impl ShortDescription {
             }
         }
         format!("[{}]", key)
-    }
-
-    /// Apply language-specific word modification (e.g. nationality transformation).
-    pub fn txt2(&self, text: &str, key: &str, lang: &str) -> String {
-        if let Some(lang_spec) = self.language_specific.get(lang) {
-            if let Some(key_map) = lang_spec.get(key) {
-                // Try to extract inner text from an HTML link
-                let link_re = html_link_re();
-                if let Some(caps) = link_re.captures(text) {
-                    let inner = caps.get(2).unwrap().as_str();
-                    if let Some(replacement) = key_map.get(inner) {
-                        return format!(
-                            "{}{}{}",
-                            caps.get(1).unwrap().as_str(),
-                            replacement,
-                            caps.get(3).unwrap().as_str()
-                        );
-                    }
-                } else if let Some(replacement) = key_map.get(text) {
-                    return replacement.clone();
-                }
-            }
-        }
-        text.to_string()
-    }
-
-    /// Modify a word based on gender hints and language.
-    pub fn modify_word(&self, word: &str, hints: &WordHints, lang: &str) -> String {
-        let lower = word.to_lowercase();
-        match lang {
-            "en" => {
-                if hints.is_female {
-                    if lower == "actor" {
-                        return "actress".to_string();
-                    }
-                    if lower == "actor / actress" {
-                        return "actress".to_string();
-                    }
-                } else if hints.is_male && lower == "actor / actress" {
-                    return "actor".to_string();
-                }
-            }
-            "fr" => {
-                if hints.is_female {
-                    if lower == "acteur" {
-                        return "actrice".to_string();
-                    }
-                    if lower == "être humain" {
-                        return "personne".to_string();
-                    }
-                }
-            }
-            "de" => {
-                if hints.is_female && hints.occupation {
-                    return format!("{}in", word);
-                }
-            }
-            _ => {}
-        }
-        word.to_string()
-    }
-
-    /// Join a list of words with the appropriate conjunction for the given language.
-    pub fn list_words(&self, original_list: &[String], hints: &WordHints, lang: &str) -> String {
-        let mut list: Vec<String> = original_list
-            .iter()
-            .map(|w| self.modify_word(w, hints, lang))
-            .collect();
-
-        let conjunction = match lang {
-            "en" => "and",
-            "de" => "und",
-            "fr" | "it" => "et",
-            "ga" => "agus",
-            "nl" => "en",
-            "pl" => "i",
-            "vi" => "và",
-            "es" | "pt" => "y",
-            _ => {
-                return list.join(", ");
-            }
-        };
-
-        match list.len() {
-            0 => String::new(),
-            1 => list.remove(0),
-            2 => format!("{} {} {}", list[0], conjunction, list[1]),
-            _ => {
-                if lang == "en" || lang == "vi" {
-                    let last = list.pop().unwrap();
-                    format!("{}, {} {}", list.join(", "), conjunction, last)
-                } else {
-                    let last = list.pop().unwrap();
-                    format!("{} {} {}", list.join(", "), conjunction, last)
-                }
-            }
-        }
-    }
-
-    fn uc_first(s: &str) -> String {
-        let mut chars = s.chars();
-        match chars.next() {
-            None => String::new(),
-            Some(c) => {
-                let upper: String = c.to_uppercase().collect();
-                format!("{}{}", upper, chars.as_str())
-            }
-        }
-    }
-
-    /// Check if claims have a specific P/Q link (both numeric).
-    /// Handles both the newer `"id": "Q<n>"` format and the older `"numeric-id": <n>` format.
-    fn has_pq(claims: &serde_json::Value, p: u64, q: u64) -> bool {
-        let prop = format!("P{}", p);
-        let claims_arr = match claims.get(&prop).and_then(|v| v.as_array()) {
-            Some(arr) => arr,
-            None => return false,
-        };
-
-        let q_str = format!("Q{}", q);
-
-        for v in claims_arr {
-            let value = match v
-                .get("mainsnak")
-                .and_then(|ms| ms.get("datavalue"))
-                .and_then(|dv| dv.get("value"))
-            {
-                Some(val) => val,
-                None => continue,
-            };
-
-            // Newer API format: "id": "Q<n>"
-            if value
-                .get("id")
-                .and_then(|i| i.as_str())
-                .map(|id| id == q_str)
-                .unwrap_or(false)
-            {
-                return true;
-            }
-
-            // Older API format: "numeric-id": <n>
-            if value
-                .get("numeric-id")
-                .and_then(|n| n.as_u64())
-                .map(|n| n == q)
-                .unwrap_or(false)
-            {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Determine if the item is a person.
-    fn is_person(claims: &serde_json::Value) -> bool {
-        Self::has_pq(claims, 107, 215627) || Self::has_pq(claims, 31, 5)
-    }
-
-    /// Determine if the item is a taxon.
-    fn is_taxon(claims: &serde_json::Value) -> bool {
-        Self::has_pq(claims, 31, 16521)
-            || Self::has_pq(claims, 105, 7432)
-            || Self::has_pq(claims, 105, 34740)
-            || Self::has_pq(claims, 105, 35409)
-    }
-
-    /// Determine if the item is a disambiguation page.
-    fn is_disambig(claims: &serde_json::Value) -> bool {
-        Self::has_pq(claims, 107, 11651459)
-    }
-
-    /// Extract items from claims for a given (numeric) property. Returns [(prop_num, qid), ...].
-    fn add_items_from_claims(claims: &serde_json::Value, p: u64, items: &mut Vec<(u64, String)>) {
-        let prefixed = format!("P{}", p);
-        let claims_arr = match claims.get(&prefixed).and_then(|v| v.as_array()) {
-            Some(arr) => arr,
-            None => return,
-        };
-
-        for v in claims_arr {
-            let mainsnak = match v.get("mainsnak") {
-                Some(ms) => ms,
-                None => continue,
-            };
-            let datavalue = match mainsnak.get("datavalue") {
-                Some(dv) => dv,
-                None => continue,
-            };
-            let value = match datavalue.get("value") {
-                Some(val) => val,
-                None => continue,
-            };
-
-            // Prefer the string "id" field (newer format), fall back to numeric-id
-            if let Some(id) = value.get("id").and_then(|i| i.as_str()) {
-                items.push((p, id.to_string()));
-            } else if let Some(numeric_id) = value.get("numeric-id").and_then(|n| n.as_u64()) {
-                items.push((p, format!("Q{}", numeric_id)));
-            }
-            // If neither field is present this is not an item value; skip it.
-        }
-    }
-
-    /// Create labeled links for a set of items. Returns a map from property number to list of labels/links.
-    pub async fn label_items(
-        &self,
-        items: &[(u64, String)],
-        opt: &DescOptions,
-        wd: &mut WikiData,
-    ) -> HashMap<u64, Vec<String>> {
-        if items.is_empty() {
-            return HashMap::new();
-        }
-
-        let use_lang = &opt.lang;
-
-        // Collect all entity IDs to load, deduplicated in O(n) with a HashSet.
-        // Also build a reverse map from entity ID -> property number for O(1) lookups later.
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut ids: Vec<String> = Vec::new();
-        // Maps each Q-id to the property number it was collected under.
-        let mut qid_to_prop: HashMap<String, u64> = HashMap::new();
-        for (p, qid) in items {
-            if *p != 0 {
-                let prop_id = format!("P{}", p);
-                if seen.insert(prop_id.clone()) {
-                    ids.push(prop_id);
-                }
-            }
-            if seen.insert(qid.clone()) {
-                ids.push(qid.clone());
-            }
-            // Last writer wins when a Q-id appears under multiple properties,
-            // which matches the previous linear-scan behaviour.
-            qid_to_prop.insert(qid.clone(), *p);
-        }
-
-        if let Err(e) = wd.get_item_batch(&ids).await {
-            tracing::warn!("Failed to load item batch: {}", e);
-        }
-
-        let mut cb: HashMap<u64, Vec<String>> = HashMap::new();
-
-        for q_str in &ids {
-            let item = match wd.get_item(q_str) {
-                Some(i) => i,
-                None => continue,
-            };
-
-            let raw = &item.raw;
-
-            // Use the item's built-in fallback chain: prefer use_lang, then
-            // MAIN_LANGUAGES in order, then any available language.
-            // get_label(Some(lang)) falls back to the item ID when the
-            // requested language is unavailable; detect that case and try the
-            // full fallback via get_label(None).
-            let label = {
-                let preferred = item.get_label(Some(use_lang));
-                if preferred != item.get_id() {
-                    preferred
-                } else {
-                    let fallback = item.get_label(None);
-                    if fallback == item.get_id() {
-                        continue; // No labels at all for this item.
-                    }
-                    fallback
-                }
-            };
-
-            // O(1) lookup of the property number for this Q-id.
-            let p: u64 = qid_to_prop.get(q_str).copied().unwrap_or(0);
-
-            // Skip certain instance-of values
-            if p == 31 && (q_str == "Q5" || q_str == "Q16521") {
-                continue;
-            }
-
-            let wiki = format!("{}wiki", use_lang);
-            let linktarget = if !opt.linktarget.is_empty() {
-                format!(" target='{}'", opt.linktarget)
-            } else {
-                String::new()
-            };
-
-            let entry = cb.entry(p).or_default();
-
-            match opt.links.as_str() {
-                "wikidata" => {
-                    entry.push(format!(
-                        "<a href='https://www.wikidata.org/wiki/{q}'{lt}>{label}</a>",
-                        q = q_str,
-                        lt = linktarget,
-                        label = label
-                    ));
-                }
-                "reasonator" => {
-                    entry.push(format!(
-                        "<a href='/reasonator/?lang={lang}&q={q}'{lt}>{label}</a>",
-                        lang = use_lang,
-                        q = q_str,
-                        lt = linktarget,
-                        label = label
-                    ));
-                }
-                "wiki" => {
-                    let sitelinks = raw.get("sitelinks");
-                    if let Some(sl) = sitelinks
-                        .and_then(|s| s.get(&wiki))
-                        .and_then(|s| s.get("title"))
-                        .and_then(|t| t.as_str())
-                    {
-                        if sl == label {
-                            entry.push(format!("[[{}]]", label));
-                        } else {
-                            entry.push(format!("[[{}|{}]]", sl, label));
-                        }
-                    } else {
-                        entry.push(label.clone());
-                    }
-                }
-                "wikipedia" => {
-                    if let Some(page) = raw
-                        .get("sitelinks")
-                        .and_then(|s| s.get(&wiki))
-                        .and_then(|s| s.get("title"))
-                        .and_then(|t| t.as_str())
-                    {
-                        let encoded = wiki_urlencode(page);
-                        entry.push(format!(
-                            "<a href='https://{lang}.wikipedia.org/wiki/{page}'{lt}>{label}</a>",
-                            lang = use_lang,
-                            page = encoded,
-                            lt = linktarget,
-                            label = label
-                        ));
-                    } else {
-                        entry.push(label.clone());
-                    }
-                }
-                "text" | "" => {
-                    entry.push(label.clone());
-                }
-                _ => {
-                    // Generic sitelink-based link
-                    let site = format!("{}{}", use_lang, opt.links);
-                    if let Some(page) = raw
-                        .get("sitelinks")
-                        .and_then(|s| s.get(&site))
-                        .and_then(|s| s.get("title"))
-                        .and_then(|t| t.as_str())
-                    {
-                        let encoded = wiki_urlencode(page);
-                        entry.push(format!(
-                            "<a href='https://{lang}.{site}.org/wiki/{page}'{lt}>{label}</a>",
-                            lang = use_lang,
-                            site = opt.links,
-                            page = encoded,
-                            lt = linktarget,
-                            label = label
-                        ));
-                    } else {
-                        entry.push(label.clone());
-                    }
-                }
-            }
-        }
-
-        cb
-    }
-
-    /// Append items to the description list from item_labels for the given properties.
-    fn add2desc(
-        &self,
-        h: &mut Vec<String>,
-        item_labels: &HashMap<u64, Vec<String>>,
-        args: Add2DescArgs<'_>,
-        lang: &str,
-    ) {
-        let mut h2: Vec<String> = Vec::new();
-        for prop in args.props {
-            if let Some(labels) = item_labels.get(prop) {
-                h2.extend(labels.clone());
-            }
-        }
-
-        if h2.is_empty() {
-            return;
-        }
-
-        if let Some(pfx) = args.prefix {
-            if !h.is_empty() {
-                let last = h.len() - 1;
-                h[last].push_str(pfx);
-            }
-        }
-
-        let s = self.list_words(&h2, args.hints, lang);
-        if let Some(key) = args.txt_key {
-            if lang == "te" {
-                h.push(format!("{} {}", s, self.txt(key, lang)));
-            } else {
-                h.push(format!("{} {}", self.txt(key, lang), s));
-            }
-        } else {
-            h.push(s);
-        }
-    }
-
-    fn get_nationality_from_country(
-        &self,
-        country: &str,
-        _claims: &serde_json::Value,
-        lang: &str,
-    ) -> String {
-        self.txt2(country, "nationality", lang)
-    }
-
-    /// Split a link string into parts: (full_match, before, inner_text, after).
-    fn split_link(v: &str) -> (String, String, String, String) {
-        // Try wiki link: [[...|text]] or [[text]]
-        if let Some(caps) = split_link_wiki_pipe_re().captures(v) {
-            return (
-                caps.get(0).unwrap().as_str().to_string(),
-                caps.get(1).unwrap().as_str().to_string(),
-                caps.get(2).unwrap().as_str().to_string(),
-                caps.get(3).unwrap().as_str().to_string(),
-            );
-        }
-
-        if let Some(caps) = split_link_wiki_re().captures(v) {
-            let inner = caps.get(2).unwrap().as_str();
-            return (
-                caps.get(0).unwrap().as_str().to_string(),
-                format!("[[{}|", inner),
-                inner.to_string(),
-                caps.get(3).unwrap().as_str().to_string(),
-            );
-        }
-
-        // Try HTML link
-        if let Some(caps) = html_link_re().captures(v) {
-            return (
-                caps.get(0).unwrap().as_str().to_string(),
-                caps.get(1).unwrap().as_str().to_string(),
-                caps.get(2).unwrap().as_str().to_string(),
-                caps.get(3).unwrap().as_str().to_string(),
-            );
-        }
-
-        // No link
-        (String::new(), String::new(), v.to_string(), String::new())
     }
 
     /// Main entry point: load and describe a Wikidata item.
@@ -594,609 +79,6 @@ impl ShortDescription {
             self.describe_generic(&q, &claims, opt, wd).await
         }
     }
-
-    /// Generate a description for a person.
-    async fn describe_person(
-        &self,
-        q: &str,
-        claims: &serde_json::Value,
-        opt: &DescOptions,
-        wd: &mut WikiData,
-    ) -> (String, String) {
-        let mut load_items: Vec<(u64, String)> = Vec::new();
-        Self::add_items_from_claims(claims, 106, &mut load_items); // Occupation
-        Self::add_items_from_claims(claims, 39, &mut load_items); // Office
-        Self::add_items_from_claims(claims, 27, &mut load_items); // Country of citizenship
-        Self::add_items_from_claims(claims, 166, &mut load_items); // Award received
-        Self::add_items_from_claims(claims, 31, &mut load_items); // Instance of
-        Self::add_items_from_claims(claims, 22, &mut load_items); // Father
-        Self::add_items_from_claims(claims, 25, &mut load_items); // Mother
-        Self::add_items_from_claims(claims, 26, &mut load_items); // Spouse
-        Self::add_items_from_claims(claims, 463, &mut load_items); // Member of
-
-        let is_male = Self::has_pq(claims, 21, 6581097);
-        let is_female = Self::has_pq(claims, 21, 6581072);
-
-        let item_labels = self.label_items(&load_items, opt, wd).await;
-        let lang = &opt.lang;
-        let mut h: Vec<String> = Vec::new();
-
-        // Nationality
-        let nationality_items = item_labels.get(&27).cloned().unwrap_or_default();
-        let mut h2 = String::new();
-
-        for (k, v) in nationality_items.iter().enumerate() {
-            let (_full, before, inner, after) = Self::split_link(v);
-            let s = self.get_nationality_from_country(&inner, claims, lang);
-            if k == 0 {
-                h2 = format!("{}{}{}", before, s, after);
-            } else {
-                h2 = format!("{}-{}{}{}", h2, before, s.to_lowercase(), after);
-            }
-        }
-        if !h2.is_empty() {
-            h.push(h2);
-        }
-
-        // Occupation
-        let ol = h.len();
-        let hints = WordHints {
-            is_male,
-            is_female,
-            occupation: true,
-        };
-        self.add2desc(
-            &mut h,
-            &item_labels,
-            Add2DescArgs {
-                props: &[31, 106],
-                hints: &hints,
-                prefix: None,
-                txt_key: None,
-            },
-            lang,
-        );
-        if h.len() == ol {
-            h.push(self.txt("person", lang));
-        }
-
-        // Office
-        let office_hints = WordHints {
-            is_male,
-            is_female,
-            ..Default::default()
-        };
-        self.add2desc(
-            &mut h,
-            &item_labels,
-            Add2DescArgs {
-                props: &[39],
-                hints: &office_hints,
-                prefix: Some(","),
-                txt_key: None,
-            },
-            lang,
-        );
-
-        // Dates
-        let born = WikiData::get_year(claims, 569, lang, &self.stock);
-        let died = WikiData::get_year(claims, 570, lang, &self.stock);
-        if !born.is_empty() && !died.is_empty() {
-            h.push(format!("({}–{})", born, died));
-        } else if !born.is_empty() {
-            h.push(format!("(*{})", born));
-        } else if !died.is_empty() {
-            h.push(format!("(†{})", died));
-        }
-
-        // Gender symbols
-        if is_female {
-            h.push("♀".to_string());
-        }
-        if is_male {
-            h.push("♂".to_string());
-        }
-
-        // Awards
-        let empty_hints = WordHints::default();
-        self.add2desc(
-            &mut h,
-            &item_labels,
-            Add2DescArgs {
-                props: &[166],
-                hints: &empty_hints,
-                prefix: Some(";"),
-                txt_key: None,
-            },
-            lang,
-        );
-
-        // Member of
-        self.add2desc(
-            &mut h,
-            &item_labels,
-            Add2DescArgs {
-                props: &[463],
-                hints: &empty_hints,
-                prefix: Some(";"),
-                txt_key: Some("member of"),
-            },
-            lang,
-        );
-
-        // Child of (father/mother)
-        self.add2desc(
-            &mut h,
-            &item_labels,
-            Add2DescArgs {
-                props: &[22, 25],
-                hints: &empty_hints,
-                prefix: Some(";"),
-                txt_key: Some("child of"),
-            },
-            lang,
-        );
-
-        // Spouse
-        self.add2desc(
-            &mut h,
-            &item_labels,
-            Add2DescArgs {
-                props: &[26],
-                hints: &empty_hints,
-                prefix: Some(";"),
-                txt_key: Some("spouse of"),
-            },
-            lang,
-        );
-
-        if h.is_empty() {
-            h.push(self.txt("person", lang));
-        }
-
-        let result = Self::uc_first(&h.join(" "));
-        (q.to_string(), clean_spaces(&result))
-    }
-
-    /// Generate a description for a taxon using SPARQL.
-    async fn describe_taxon(
-        &self,
-        q: &str,
-        claims: &serde_json::Value,
-        opt: &DescOptions,
-        wd: &mut WikiData,
-    ) -> (String, String) {
-        let sparql = format!(
-            "SELECT ?taxon ?taxonRank ?taxonRankLabel ?parentTaxon ?taxonLabel ?taxonName {{ wd:{q} \
-             wdt:P171* ?taxon . ?taxon wdt:P171 ?parentTaxon . ?taxon wdt:P225 ?taxonName . ?taxon wdt:P105 ?taxonRank . \
-             SERVICE wikibase:label {{ bd:serviceParam wikibase:language \"[AUTO_LANGUAGE],{lang}\". }} }}",
-            q = q,
-            lang = opt.lang
-        );
-
-        let url = format!(
-            "https://query.wikidata.org/bigdata/namespace/wdq/sparql?format=json&query={}",
-            urlencoding::encode(&sparql)
-        );
-
-        let body = match wd.get_json(&url).await {
-            Ok(v) => v,
-            Err(_) => return self.describe_generic(q, claims, opt, wd).await,
-        };
-
-        let bindings = body
-            .get("results")
-            .and_then(|r| r.get("bindings"))
-            .and_then(|b| b.as_array())
-            .cloned()
-            .unwrap_or_default();
-
-        let entity_re = entity_url_re();
-
-        let mut taxon_name: Option<String> = None;
-        let mut taxa_cache: Vec<Option<serde_json::Value>> = vec![None; 9];
-        let mut load_items: Vec<(u64, String)> = Vec::new();
-
-        for binding in &bindings {
-            let taxon_q = entity_re
-                .replace_all(
-                    binding
-                        .get("taxon")
-                        .and_then(|t| t.get("value"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(""),
-                    "",
-                )
-                .to_string();
-            let taxon_rank = entity_re
-                .replace_all(
-                    binding
-                        .get("taxonRank")
-                        .and_then(|t| t.get("value"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(""),
-                    "",
-                )
-                .to_string();
-
-            if taxon_q == q {
-                load_items.push((0, taxon_rank.clone()));
-                if let Some(tn) = binding
-                    .get("taxonName")
-                    .and_then(|t| t.get("value"))
-                    .and_then(|v| v.as_str())
-                {
-                    taxon_name = Some(tn.to_string());
-                }
-            }
-
-            if let Some(rank_id) = taxon_rank_index(&taxon_rank) {
-                if rank_id < taxa_cache.len() {
-                    taxa_cache[rank_id] = Some(binding.clone());
-                }
-            }
-        }
-
-        for binding in taxa_cache.iter().flatten() {
-            let taxon_label = binding
-                .get("taxonLabel")
-                .and_then(|t| t.get("value"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let taxon_name_val = binding
-                .get("taxonName")
-                .and_then(|t| t.get("value"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-
-            if taxon_label.to_lowercase() != taxon_name_val.to_lowercase() {
-                let taxon_q = entity_re
-                    .replace_all(
-                        binding
-                            .get("taxon")
-                            .and_then(|t| t.get("value"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(""),
-                        "",
-                    )
-                    .to_string();
-                load_items.push((0, taxon_q));
-                break;
-            }
-        }
-
-        let item_labels = self.label_items(&load_items, opt, wd).await;
-        let labels_0 = item_labels.get(&0).cloned().unwrap_or_default();
-
-        if labels_0.is_empty() {
-            return self.describe_generic(q, claims, opt, wd).await;
-        }
-
-        let mut h_parts: Vec<String> = vec![labels_0[0].clone()];
-        if labels_0.len() >= 2 {
-            h_parts[0] = format!(
-                "{} {} {}",
-                h_parts[0],
-                self.txt("of", &opt.lang),
-                labels_0[1]
-            );
-        }
-
-        if let Some(name) = &taxon_name {
-            h_parts.push(format!("[{}]", name));
-        }
-
-        let result = Self::uc_first(&h_parts.join(", "));
-        (q.to_string(), clean_spaces(&result))
-    }
-
-    /// Generate a generic description for non-person, non-taxon items.
-    async fn describe_generic(
-        &self,
-        q: &str,
-        claims: &serde_json::Value,
-        opt: &DescOptions,
-        wd: &mut WikiData,
-    ) -> (String, String) {
-        let mut load_items: Vec<(u64, String)> = Vec::new();
-
-        Self::add_items_from_claims(claims, 361, &mut load_items); // Part of
-        Self::add_items_from_claims(claims, 279, &mut load_items); // Subclass of
-        Self::add_items_from_claims(claims, 1269, &mut load_items); // Facet of
-        Self::add_items_from_claims(claims, 31, &mut load_items); // Instance of
-        Self::add_items_from_claims(claims, 60, &mut load_items); // Astronomical object
-
-        Self::add_items_from_claims(claims, 175, &mut load_items); // Performer
-        Self::add_items_from_claims(claims, 86, &mut load_items); // Composer
-        Self::add_items_from_claims(claims, 170, &mut load_items); // Creator
-        Self::add_items_from_claims(claims, 57, &mut load_items); // Director
-        Self::add_items_from_claims(claims, 162, &mut load_items); // Producer
-        Self::add_items_from_claims(claims, 50, &mut load_items); // Author
-        Self::add_items_from_claims(claims, 61, &mut load_items); // Discoverer/inventor
-
-        Self::add_items_from_claims(claims, 17, &mut load_items); // Country
-        Self::add_items_from_claims(claims, 131, &mut load_items); // Admin unit
-
-        Self::add_items_from_claims(claims, 495, &mut load_items); // Country of origin
-        Self::add_items_from_claims(claims, 159, &mut load_items); // Headquarters
-
-        Self::add_items_from_claims(claims, 306, &mut load_items); // OS
-        Self::add_items_from_claims(claims, 400, &mut load_items); // Platform
-        Self::add_items_from_claims(claims, 176, &mut load_items); // Manufacturer
-
-        Self::add_items_from_claims(claims, 123, &mut load_items); // Publisher
-        Self::add_items_from_claims(claims, 264, &mut load_items); // Record label
-
-        Self::add_items_from_claims(claims, 105, &mut load_items); // Taxon rank
-        Self::add_items_from_claims(claims, 138, &mut load_items); // Named after
-        Self::add_items_from_claims(claims, 171, &mut load_items); // Parent taxon
-
-        Self::add_items_from_claims(claims, 1433, &mut load_items); // Published in
-        Self::add_items_from_claims(claims, 571, &mut load_items); // Inception
-        Self::add_items_from_claims(claims, 576, &mut load_items); // Until
-        Self::add_items_from_claims(claims, 585, &mut load_items); // Point in time
-        Self::add_items_from_claims(claims, 703, &mut load_items); // Found in taxon
-        Self::add_items_from_claims(claims, 1080, &mut load_items); // From fictional universe
-        Self::add_items_from_claims(claims, 1441, &mut load_items); // Present in work
-        Self::add_items_from_claims(claims, 921, &mut load_items); // Main topic
-
-        Self::add_items_from_claims(claims, 425, &mut load_items); // Field of profession
-        Self::add_items_from_claims(claims, 59, &mut load_items); // Constellation
-
-        Self::add_items_from_claims(claims, 1082, &mut load_items); // Population
-
-        let item_labels = self.label_items(&load_items, opt, wd).await;
-        let lang = &opt.lang;
-        let empty_hints = WordHints::default();
-        let mut h: Vec<String> = Vec::new();
-
-        // Publication date
-        let pubdate = WikiData::get_year(claims, 577, lang, &self.stock);
-        if !pubdate.is_empty() {
-            h.push(pubdate);
-        }
-
-        // Instance/subclass/etc
-        self.add2desc(
-            &mut h,
-            &item_labels,
-            Add2DescArgs {
-                props: &[279, 31, 1269, 60, 105],
-                hints: &empty_hints,
-                prefix: None,
-                txt_key: None,
-            },
-            lang,
-        );
-
-        // Location
-        let sep = " / ";
-        let h2: Vec<String> = item_labels.get(&131).cloned().unwrap_or_default();
-        let h3: Vec<String> = item_labels.get(&17).cloned().unwrap_or_default();
-
-        if h.is_empty() && (!h2.is_empty() || !h3.is_empty()) {
-            h.push(self.txt("location", lang));
-        }
-
-        if !h2.is_empty() && !h3.is_empty() {
-            h.push(format!(
-                "{} {}, {}",
-                self.txt("in", lang),
-                h2.join(sep),
-                h3.join(sep)
-            ));
-        } else if !h2.is_empty() {
-            h.push(format!("{} {}", self.txt("in", lang), h2.join(sep)));
-        } else if !h3.is_empty() {
-            h.push(format!("{} {}", self.txt("in", lang), h3.join(sep)));
-        }
-
-        // Population — use the claims value already in scope instead of re-fetching the item.
-        let pop_claims = claims
-            .get("P1082")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-        if let Some(best) = WikiDataItem::get_best_quantity(&pop_claims) {
-            let pop_label = wd
-                .get_item("P1082")
-                .map(|i| i.get_label(Some(lang)))
-                .unwrap_or_else(|| "population".to_string());
-            h.push(format!(", {} {}", pop_label, best));
-        }
-
-        // Creator etc
-        self.add2desc(
-            &mut h,
-            &item_labels,
-            Add2DescArgs {
-                props: &[175, 86, 170, 57, 50, 61, 176],
-                hints: &empty_hints,
-                prefix: None,
-                txt_key: Some("by"),
-            },
-            lang,
-        );
-        self.add2desc(
-            &mut h,
-            &item_labels,
-            Add2DescArgs {
-                props: &[162],
-                hints: &empty_hints,
-                prefix: Some(","),
-                txt_key: Some("produced by"),
-            },
-            lang,
-        );
-        self.add2desc(
-            &mut h,
-            &item_labels,
-            Add2DescArgs {
-                props: &[306, 400],
-                hints: &empty_hints,
-                prefix: None,
-                txt_key: Some("for"),
-            },
-            lang,
-        );
-        self.add2desc(
-            &mut h,
-            &item_labels,
-            Add2DescArgs {
-                props: &[264, 123],
-                hints: &empty_hints,
-                prefix: None,
-                txt_key: Some("from"),
-            },
-            lang,
-        );
-        self.add2desc(
-            &mut h,
-            &item_labels,
-            Add2DescArgs {
-                props: &[361],
-                hints: &empty_hints,
-                prefix: Some(","),
-                txt_key: Some("part of"),
-            },
-            lang,
-        );
-        self.add2desc(
-            &mut h,
-            &item_labels,
-            Add2DescArgs {
-                props: &[138],
-                hints: &empty_hints,
-                prefix: Some(","),
-                txt_key: Some("named after"),
-            },
-            lang,
-        );
-        self.add2desc(
-            &mut h,
-            &item_labels,
-            Add2DescArgs {
-                props: &[425],
-                hints: &empty_hints,
-                prefix: Some(","),
-                txt_key: Some("in the field of"),
-            },
-            lang,
-        );
-        self.add2desc(
-            &mut h,
-            &item_labels,
-            Add2DescArgs {
-                props: &[171],
-                hints: &empty_hints,
-                prefix: None,
-                txt_key: Some("of"),
-            },
-            lang,
-        );
-        self.add2desc(
-            &mut h,
-            &item_labels,
-            Add2DescArgs {
-                props: &[59],
-                hints: &empty_hints,
-                prefix: None,
-                txt_key: Some("in the constellation"),
-            },
-            lang,
-        );
-        self.add2desc(
-            &mut h,
-            &item_labels,
-            Add2DescArgs {
-                props: &[1433],
-                hints: &empty_hints,
-                prefix: None,
-                txt_key: Some("published in"),
-            },
-            lang,
-        );
-        self.add2desc(
-            &mut h,
-            &item_labels,
-            Add2DescArgs {
-                props: &[585],
-                hints: &empty_hints,
-                prefix: None,
-                txt_key: Some("in"),
-            },
-            lang,
-        );
-        self.add2desc(
-            &mut h,
-            &item_labels,
-            Add2DescArgs {
-                props: &[703],
-                hints: &empty_hints,
-                prefix: None,
-                txt_key: Some("found_in"),
-            },
-            lang,
-        );
-        self.add2desc(
-            &mut h,
-            &item_labels,
-            Add2DescArgs {
-                props: &[1080, 1441],
-                hints: &empty_hints,
-                prefix: None,
-                txt_key: Some("from"),
-            },
-            lang,
-        );
-        self.add2desc(
-            &mut h,
-            &item_labels,
-            Add2DescArgs {
-                props: &[921],
-                hints: &empty_hints,
-                prefix: None,
-                txt_key: Some("about"),
-            },
-            lang,
-        );
-
-        // Inception / Until dates — `claims` is already the claims object for `q`
-        let inception_year = WikiData::get_year(claims, 571, lang, &self.stock);
-        if !inception_year.is_empty() {
-            h.push(format!(", {} {}", self.txt("from", lang), inception_year));
-        }
-        let until_year = WikiData::get_year(claims, 576, lang, &self.stock);
-        if !until_year.is_empty() {
-            h.push(format!(", {} {}", self.txt("until", lang), until_year));
-        }
-
-        // Origin (headquarters, country of origin)
-        let h2: Vec<String> = item_labels.get(&159).cloned().unwrap_or_default();
-        let h3: Vec<String> = item_labels.get(&495).cloned().unwrap_or_default();
-        if !h2.is_empty() && !h3.is_empty() {
-            h.push(format!(
-                "{} {}, {}",
-                self.txt("from", lang),
-                h2.join(sep),
-                h3.join(sep)
-            ));
-        } else if !h2.is_empty() {
-            h.push(format!("{} {}", self.txt("from", lang), h2.join(sep)));
-        } else if !h3.is_empty() {
-            h.push(format!("{} {}", self.txt("from", lang), h3.join(sep)));
-        }
-
-        // Fallback
-        if h.is_empty() {
-            let fallback = format!("<i>{}</i>", self.txt("cannot_describe", lang));
-            return (q.to_string(), fallback);
-        }
-
-        let result = Self::uc_first(&h.join(" "));
-        let result = clean_spaces(&result);
-        (q.to_string(), result)
-    }
 }
 
 impl Default for ShortDescription {
@@ -1205,21 +87,9 @@ impl Default for ShortDescription {
     }
 }
 
-/// URL-encode a wiki page title.
-fn wiki_urlencode(s: &str) -> String {
-    let s = s.replace(' ', "_");
-    urlencoding::encode(&s).to_string()
-}
-
-/// Clean up extra spaces and punctuation artifacts.
-fn clean_spaces(s: &str) -> String {
-    let result = clean_spaces_re().replace_all(s, " ");
-    let result = clean_space_comma_re().replace_all(&result, ",");
-    result.trim().to_string()
-}
-
 #[cfg(test)]
 mod tests {
+    use super::word_helpers::{clean_spaces, split_link, uc_first};
     use super::*;
 
     #[test]
@@ -1267,9 +137,9 @@ mod tests {
 
     #[test]
     fn test_uc_first() {
-        assert_eq!(ShortDescription::uc_first("hello"), "Hello");
-        assert_eq!(ShortDescription::uc_first(""), "");
-        assert_eq!(ShortDescription::uc_first("Hello"), "Hello");
+        assert_eq!(uc_first("hello"), "Hello");
+        assert_eq!(uc_first(""), "");
+        assert_eq!(uc_first("Hello"), "Hello");
     }
 
     #[test]
@@ -1294,7 +164,6 @@ mod tests {
 
     #[test]
     fn test_has_pq_newer_id_format() {
-        // Wikidata now returns "id": "Q5" instead of "numeric-id": 5
         let claims = serde_json::json!({
             "P31": [
                 {
@@ -1315,8 +184,6 @@ mod tests {
 
     #[test]
     fn test_has_pq_missing_mainsnak_continues() {
-        // A claim with no mainsnak should be skipped, not cause a false negative
-        // for subsequent valid claims.
         let claims = serde_json::json!({
             "P31": [
                 {},
@@ -1334,8 +201,6 @@ mod tests {
 
     #[test]
     fn test_add_items_from_claims_uses_continue_not_return() {
-        // This test verifies that a missing mainsnak in one claim does NOT
-        // prevent subsequent claims in the same property from being processed.
         let claims = serde_json::json!({
             "P106": [
                 {
@@ -1353,14 +218,12 @@ mod tests {
 
         let mut items: Vec<(u64, String)> = Vec::new();
         ShortDescription::add_items_from_claims(&claims, 106, &mut items);
-        // The second valid claim should still be collected
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].1, "Q36180");
     }
 
     #[test]
     fn test_add_items_from_claims_numeric_id_fallback() {
-        // Ensure numeric-id is used when "id" is absent
         let claims = serde_json::json!({
             "P31": [{
                 "mainsnak": {
@@ -1382,8 +245,6 @@ mod tests {
 
     #[test]
     fn test_add_items_from_claims_no_id_no_numeric_id_skipped() {
-        // When neither "id" nor "numeric-id" is present, the claim should be skipped
-        // (not push a spurious "P<n>" string).
         let claims = serde_json::json!({
             "P31": [{
                 "mainsnak": {
@@ -1404,9 +265,6 @@ mod tests {
 
     #[test]
     fn test_clean_spaces() {
-        // clean_spaces is private but we can test it indirectly via describe results;
-        // test it directly here to ensure the cached regex works correctly.
-        // We use a workaround: call it through the module since it's in the same file.
         assert_eq!(clean_spaces("hello  world"), "hello world");
         assert_eq!(clean_spaces("foo ,bar"), "foo,bar");
         assert_eq!(clean_spaces("  trim  "), "trim");
@@ -1414,20 +272,35 @@ mod tests {
 
     #[test]
     fn test_split_link() {
-        let (_, before, inner, after) = ShortDescription::split_link("<a href='test'>Hello</a>");
+        let (_, before, inner, after) = split_link("<a href='test'>Hello</a>");
         assert_eq!(before, "<a href='test'>");
         assert_eq!(inner, "Hello");
         assert_eq!(after, "</a>");
 
-        let (_, before, inner, after) = ShortDescription::split_link("plain text");
+        let (_, before, inner, after) = split_link("plain text");
         assert_eq!(before, "");
         assert_eq!(inner, "plain text");
         assert_eq!(after, "");
 
-        let (_, before, inner, after) = ShortDescription::split_link("[[Page|Label]]");
+        let (_, before, inner, after) = split_link("[[Page|Label]]");
         assert_eq!(before, "[[Page|");
         assert_eq!(inner, "Label");
         assert_eq!(after, "]]");
+    }
+
+    #[test]
+    fn test_modify_word_gender() {
+        let sd = ShortDescription::new();
+        let female = WordHints {
+            is_female: true,
+            ..Default::default()
+        };
+        let male = WordHints {
+            is_male: true,
+            ..Default::default()
+        };
+        assert_eq!(sd.modify_word("actor", &female, "en"), "actress");
+        assert_eq!(sd.modify_word("actor", &male, "en"), "actor");
     }
 
     #[tokio::test]
@@ -1442,8 +315,6 @@ mod tests {
         let (q, desc) = sd.load_item("Q12345", &mut opt, &mut wd).await;
         assert_eq!(q, "Q12345");
         assert!(!desc.is_empty());
-        // Q12345 is Count von Count - should be a generic or character description
-        // The result should contain some useful text
     }
 
     #[tokio::test]
@@ -1455,11 +326,9 @@ mod tests {
             links: "text".to_string(),
             ..Default::default()
         };
-        // Q42 is Douglas Adams - a person
         let (q, desc) = sd.load_item("Q42", &mut opt, &mut wd).await;
         assert_eq!(q, "Q42");
         assert!(!desc.is_empty());
-        // Should contain occupation info and dates
         assert!(
             desc.contains("1952") || desc.contains("writer") || desc.contains("novelist"),
             "Person description should contain dates or occupations, got: {}",
@@ -1477,7 +346,6 @@ mod tests {
             ..Default::default()
         };
         let (_q, desc) = sd.load_item("Q42", &mut opt, &mut wd).await;
-        // With wikidata links, should contain <a href='https://www.wikidata.org/wiki/...'>
         assert!(
             desc.contains("wikidata.org") || desc.contains("<a "),
             "Wikidata link mode should produce HTML links, got: {}",
@@ -1495,7 +363,6 @@ mod tests {
             ..Default::default()
         };
         let (_q, desc) = sd.load_item("Q4504", &mut opt, &mut wd).await;
-        // Q4504 is Komodo dragon, should produce wiki-style links
         assert!(
             desc.contains("[[") || !desc.is_empty(),
             "Wiki link mode should produce wikitext or plain labels, got: {}",
