@@ -22,6 +22,10 @@ pub struct WikiData {
 
 impl WikiData {
     pub fn new() -> Self {
+        Self::with_api_url("https://www.wikidata.org/w/api.php")
+    }
+
+    pub fn with_api_url(api_url: &str) -> Self {
         let client = Client::builder()
             .user_agent("autodesc/0.2.0 (https://github.com/magnusmanske/autodesc; magnusmanske@googlemail.com) reqwest")
             .build()
@@ -29,7 +33,7 @@ impl WikiData {
         Self {
             items: HashMap::new(),
             client,
-            api_url: "https://www.wikidata.org/w/api.php".to_string(),
+            api_url: api_url.to_string(),
             max_get_entities: 50,
         }
     }
@@ -178,6 +182,8 @@ impl Default for WikiData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn test_get_year_bc() {
@@ -245,9 +251,85 @@ mod tests {
         assert_eq!(year, "100 BC");
     }
 
+    /// Helper: build a wbgetentities-style response for the given entities.
+    fn fake_wbgetentities(entities: Value) -> Value {
+        serde_json::json!({ "entities": entities })
+    }
+
+    fn fake_q12345() -> Value {
+        serde_json::json!({
+            "Q12345": {
+                "type": "item",
+                "id": "Q12345",
+                "ns": 0,
+                "labels": {
+                    "en": { "language": "en", "value": "Count von Count" },
+                    "de": { "language": "de", "value": "Graf Zahl" }
+                },
+                "descriptions": {
+                    "en": { "language": "en", "value": "Sesame Street character" }
+                },
+                "claims": {
+                    "P31": [{
+                        "mainsnak": {
+                            "datavalue": {
+                                "value": { "entity-type": "item", "id": "Q30061417" }
+                            }
+                        }
+                    }],
+                    "P345": [{
+                        "mainsnak": {
+                            "datavalue": {
+                                "type": "string",
+                                "value": "ch0000000"
+                            }
+                        }
+                    }]
+                },
+                "sitelinks": {
+                    "dewiki": { "site": "dewiki", "title": "Graf Zahl" },
+                    "enwiki": { "site": "enwiki", "title": "Count von Count" }
+                }
+            }
+        })
+    }
+
+    fn fake_q42_q1() -> Value {
+        serde_json::json!({
+            "Q42": {
+                "type": "item",
+                "id": "Q42",
+                "ns": 0,
+                "labels": { "en": { "language": "en", "value": "Douglas Adams" } },
+                "descriptions": {},
+                "claims": {},
+                "sitelinks": {}
+            },
+            "Q1": {
+                "type": "item",
+                "id": "Q1",
+                "ns": 0,
+                "labels": { "en": { "language": "en", "value": "Universe" } },
+                "descriptions": {},
+                "claims": {},
+                "sitelinks": {}
+            }
+        })
+    }
+
     #[tokio::test]
     async fn test_load_entity() {
-        let mut wd = WikiData::new();
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/w/api.php"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(fake_wbgetentities(fake_q12345())),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
         wd.load_entity("Q12345").await.unwrap();
         assert!(wd.has_item("Q12345"));
 
@@ -255,23 +337,30 @@ mod tests {
         assert!(!item.is_placeholder());
 
         let label = item.get_label(Some("en"));
-        assert!(!label.is_empty());
+        assert_eq!(label, "Count von Count");
 
-        // Test IMDB strings
         let imdb = item.get_strings_for_property("P345");
-        assert!(!imdb.is_empty());
+        assert_eq!(imdb, vec!["ch0000000"]);
 
-        // Test has_claim_item_link
         assert!(item.has_claim_item_link("P31", "Q30061417"));
 
-        // Test sitelinks
         let wl = item.get_wiki_links();
         assert!(wl.contains_key("dewiki"));
     }
 
     #[tokio::test]
     async fn test_batch_loading() {
-        let mut wd = WikiData::new();
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/w/api.php"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(fake_wbgetentities(fake_q42_q1())),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
         let items = vec!["Q42".to_string(), "Q1".to_string()];
         wd.get_item_batch(&items).await.unwrap();
         assert!(wd.has_item("Q42"));
@@ -280,7 +369,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_clear() {
-        let mut wd = WikiData::new();
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/w/api.php"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(fake_wbgetentities(serde_json::json!({
+                    "Q42": {
+                        "type": "item", "id": "Q42", "ns": 0,
+                        "labels": {}, "descriptions": {}, "claims": {}, "sitelinks": {}
+                    }
+                }))),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
         wd.load_entity("Q42").await.unwrap();
         assert!(wd.has_item("Q42"));
         wd.clear();
@@ -289,8 +392,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_batch_dedup() {
-        let mut wd = WikiData::new();
-        // Duplicates and case variants should be de-duped before the API call.
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/w/api.php"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(fake_wbgetentities(fake_q42_q1())),
+            )
+            .expect(1) // only one API call despite 4 input IDs
+            .mount(&mock_server)
+            .await;
+
+        let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
         let items = vec![
             "Q42".to_string(),
             "Q1".to_string(),
@@ -304,9 +417,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_already_loaded_skipped() {
-        let mut wd = WikiData::new();
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/w/api.php"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(fake_wbgetentities(serde_json::json!({
+                    "Q42": {
+                        "type": "item", "id": "Q42", "ns": 0,
+                        "labels": { "en": { "language": "en", "value": "Douglas Adams" } },
+                        "descriptions": {}, "claims": {}, "sitelinks": {}
+                    }
+                }))),
+            )
+            .expect(1) // only one API call despite two load_entity calls
+            .mount(&mock_server)
+            .await;
+
+        let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
         wd.load_entity("Q42").await.unwrap();
-        // A second load should not panic or overwrite; just a no-op.
         wd.load_entity("Q42").await.unwrap();
         assert!(wd.has_item("Q42"));
     }
