@@ -12,7 +12,7 @@ pub struct WordHints {
 use regex::Regex;
 
 use crate::desc_options::DescOptions;
-use crate::wikidata::{sanitize_q, WikiData, WikiDataItem, MAIN_LANGUAGES};
+use crate::wikidata::{sanitize_q, WikiData, WikiDataItem};
 
 /// Maps a taxon-rank Q-id string to its index in the taxa_cache array.
 /// Returns `None` for unrecognised ranks.
@@ -76,7 +76,6 @@ struct Add2DescArgs<'a> {
 pub struct ShortDescription {
     pub stock: HashMap<String, HashMap<String, String>>,
     pub language_specific: HashMap<String, HashMap<String, HashMap<String, String>>>,
-    main_languages: Vec<String>,
 }
 
 impl ShortDescription {
@@ -88,7 +87,6 @@ impl ShortDescription {
         Self {
             stock,
             language_specific: HashMap::new(),
-            main_languages: MAIN_LANGUAGES.iter().map(|s| s.to_string()).collect(),
         }
     }
 
@@ -354,39 +352,23 @@ impl ShortDescription {
             };
 
             let raw = &item.raw;
-            let labels = match raw.get("labels").and_then(|l| l.as_object()) {
-                Some(l) => l,
-                None => continue,
-            };
 
-            // Find the best available language for the label
-            let mut curlang = use_lang.clone();
-            if !labels.contains_key(&curlang) {
-                let mut found = false;
-                for language in &self.main_languages {
-                    if labels.contains_key(language.as_str()) {
-                        curlang = language.clone();
-                        found = true;
-                        break;
+            // Use the item's built-in fallback chain: prefer use_lang, then
+            // MAIN_LANGUAGES in order, then any available language.
+            // get_label(Some(lang)) falls back to the item ID when the
+            // requested language is unavailable; detect that case and try the
+            // full fallback via get_label(None).
+            let label = {
+                let preferred = item.get_label(Some(use_lang));
+                if preferred != item.get_id() {
+                    preferred
+                } else {
+                    let fallback = item.get_label(None);
+                    if fallback == item.get_id() {
+                        continue; // No labels at all for this item.
                     }
+                    fallback
                 }
-                if !found {
-                    // Take any available language
-                    if let Some(first_lang) = labels.keys().next() {
-                        curlang = first_lang.clone();
-                    } else {
-                        continue;
-                    }
-                }
-            }
-
-            let label = match labels
-                .get(&curlang)
-                .and_then(|l| l.get("value"))
-                .and_then(|v| v.as_str())
-            {
-                Some(l) => l.to_string(),
-                None => continue,
             };
 
             // O(1) lookup of the property number for this Q-id.
