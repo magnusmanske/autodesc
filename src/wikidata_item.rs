@@ -74,10 +74,20 @@ impl WikiDataItem {
             {
                 return label.to_string();
             }
+            // Try "mul" (multilingual) before giving up
+            if let Some(label) = self
+                .raw
+                .get("labels")
+                .and_then(|ls| ls.get("mul"))
+                .and_then(|l| l.get("value"))
+                .and_then(|v| v.as_str())
+            {
+                return label.to_string();
+            }
             return fallback;
         }
 
-        // No language specified: try main languages in order, then any available one.
+        // No language specified: try main languages in order, then "mul", then any available one.
         for lang in MAIN_LANGUAGES {
             if let Some(label) = self
                 .raw
@@ -88,6 +98,16 @@ impl WikiDataItem {
             {
                 return label.to_string();
             }
+        }
+
+        if let Some(label) = self
+            .raw
+            .get("labels")
+            .and_then(|ls| ls.get("mul"))
+            .and_then(|l| l.get("value"))
+            .and_then(|v| v.as_str())
+        {
+            return label.to_string();
         }
 
         // Fallback: pick first available language.
@@ -314,6 +334,22 @@ mod tests {
         assert_eq!(item.get_label(Some("de")), "Douglas Adams (de)");
         // Missing language falls back to id
         assert_eq!(item.get_label(Some("xx")), "Q42");
+    }
+
+    #[test]
+    fn test_get_label_fallback_to_mul() {
+        let raw = serde_json::json!({
+            "id": "Q42",
+            "ns": 0,
+            "labels": {
+                "mul": { "value": "Mul Label" }
+            }
+        });
+        let item = WikiDataItem::new(raw);
+        // Specific language not present → falls back to "mul"
+        assert_eq!(item.get_label(Some("fr")), "Mul Label");
+        // No language → MAIN_LANGUAGES all absent, falls back to "mul"
+        assert_eq!(item.get_label(None), "Mul Label");
     }
 
     #[test]
