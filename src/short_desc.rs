@@ -283,9 +283,12 @@ impl ShortDescription {
 
         let use_lang = &opt.lang;
 
-        // Collect all entity IDs to load, deduplicated in O(n) with a HashSet
+        // Collect all entity IDs to load, deduplicated in O(n) with a HashSet.
+        // Also build a reverse map from entity ID -> property number for O(1) lookups later.
         let mut seen: HashSet<String> = HashSet::new();
         let mut ids: Vec<String> = Vec::new();
+        // Maps each Q-id to the property number it was collected under.
+        let mut qid_to_prop: HashMap<String, u64> = HashMap::new();
         for (p, qid) in items {
             if *p != 0 {
                 let prop_id = format!("P{}", p);
@@ -296,6 +299,9 @@ impl ShortDescription {
             if seen.insert(qid.clone()) {
                 ids.push(qid.clone());
             }
+            // Last writer wins when a Q-id appears under multiple properties,
+            // which matches the previous linear-scan behaviour.
+            qid_to_prop.insert(qid.clone(), *p);
         }
 
         if let Err(e) = wd.get_item_batch(&ids).await {
@@ -346,14 +352,8 @@ impl ShortDescription {
                 None => continue,
             };
 
-            // Determine which property number this Q belongs to
-            let mut p: u64 = 0;
-            for (prop_num, item_q) in items {
-                if item_q == q_str {
-                    p = *prop_num;
-                    break;
-                }
-            }
+            // O(1) lookup of the property number for this Q-id.
+            let p: u64 = qid_to_prop.get(q_str).copied().unwrap_or(0);
 
             // Skip certain instance-of values
             if p == 31 && (q_str == "Q5" || q_str == "Q16521") {
