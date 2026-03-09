@@ -241,7 +241,7 @@ async fn test_long_desc_returns_none_for_unsupported_lang() {
     let sd = ShortDescription::new();
     let claims = claims_male_writer_deceased();
     let opt = DescOptions {
-        lang: "de".to_string(), // German is not in LONG_DESC_LANGUAGES
+        lang: "ja".to_string(), // Japanese is not in LONG_DESC_LANGUAGES
         links: "text".to_string(),
         ..Default::default()
     };
@@ -649,7 +649,7 @@ fn test_is_long_desc_available() {
     assert!(is_long_desc_available("en"));
     assert!(is_long_desc_available("nl"));
     assert!(is_long_desc_available("fr"));
-    assert!(!is_long_desc_available("de"));
+    assert!(is_long_desc_available("de"));
     assert!(!is_long_desc_available("es"));
     assert!(!is_long_desc_available(""));
 }

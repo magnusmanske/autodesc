@@ -8,12 +8,13 @@ use crate::desc_options::DescOptions;
 use crate::short_desc::ShortDescription;
 use crate::wikidata::{WikiData, WikiDataItem};
 
+mod lang_de;
 mod lang_en;
 mod lang_fr;
 mod lang_nl;
 
 /// Supported long-description languages.
-const LONG_DESC_LANGUAGES: &[&str] = &["en", "nl", "fr"];
+const LONG_DESC_LANGUAGES: &[&str] = &["de", "en", "nl", "fr"];
 
 /// A fragment in the long description output.
 /// Either a literal string or a reference to a Wikidata item that will be resolved to a label/link.
@@ -289,6 +290,7 @@ impl LongDescGenerator {
     ) -> Option<String> {
         // Dispatch to the language-specific generator
         let lang_gen: &dyn LangGenerator = match opt.lang.as_str() {
+            "de" => &lang_de::LangDe,
             "en" => &lang_en::LangEn,
             "nl" => &lang_nl::LangNl,
             "fr" => &lang_fr::LangFr,
