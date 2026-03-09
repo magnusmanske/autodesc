@@ -1,4 +1,5 @@
-use autodesc::short_desc::{DescOptions, ShortDescription};
+use autodesc::desc_options::DescOptions;
+use autodesc::short_desc::ShortDescription;
 use autodesc::wikidata::WikiData;
 
 /// Test that the ShortDescription can generate a description for a known person (Q42 = Douglas Adams).

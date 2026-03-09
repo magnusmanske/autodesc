@@ -11,8 +11,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tower_http::cors::CorsLayer;
 
+use autodesc::desc_options::DescOptions;
 use autodesc::media::MediaGenerator;
-use autodesc::short_desc::{DescOptions, ShortDescription};
+use autodesc::short_desc::ShortDescription;
 use autodesc::wikidata::WikiData;
 
 const DEFAULT_LANGUAGE: &str = "en";

@@ -3,6 +3,7 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
+use crate::desc_options::DescOptions;
 use crate::wikidata::{sanitize_q, WikiData, WikiDataItem, MAIN_LANGUAGES};
 
 fn split_link_wiki_pipe_re() -> &'static Regex {
@@ -33,32 +34,6 @@ fn clean_spaces_re() -> &'static Regex {
 fn clean_space_comma_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r" ,").expect("regex is valid"))
-}
-
-/// Options passed to the description generator.
-#[derive(Debug, Clone)]
-pub struct DescOptions {
-    pub q: String,
-    pub lang: String,
-    pub links: String,
-    pub linktarget: String,
-    pub redlinks: String,
-    pub fallback: String,
-    pub mode: String,
-}
-
-impl Default for DescOptions {
-    fn default() -> Self {
-        Self {
-            q: String::new(),
-            lang: "en".to_string(),
-            links: "wikidata".to_string(),
-            linktarget: String::new(),
-            redlinks: String::new(),
-            fallback: String::new(),
-            mode: "short".to_string(),
-        }
-    }
 }
 
 /// The short description generator, ported from the Python `ShortDescription` class.
