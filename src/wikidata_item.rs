@@ -136,11 +136,10 @@ impl WikiDataItem {
             {
                 let claim_lang = value.get("language").and_then(|l| l.as_str());
                 let text = value.get("text").and_then(|t| t.as_str());
-                if let (Some(cl), Some(t)) = (claim_lang, text) {
-                    if cl == lang {
+                if let (Some(cl), Some(t)) = (claim_lang, text)
+                    && cl == lang {
                         return Some(t.to_string());
                     }
-                }
             }
         }
         None
@@ -158,11 +157,10 @@ impl WikiDataItem {
             {
                 let claim_lang = value.get("language").and_then(|l| l.as_str());
                 let text = value.get("text").and_then(|t| t.as_str());
-                if let (Some(cl), Some(t)) = (claim_lang, text) {
-                    if cl == lang {
+                if let (Some(cl), Some(t)) = (claim_lang, text)
+                    && cl == lang {
                         return Some(t.to_string());
                     }
-                }
             }
         }
         None
@@ -292,8 +290,8 @@ impl WikiDataItem {
             }
         }
 
-        if include_labels {
-            if let Some(label) = self
+        if include_labels
+            && let Some(label) = self
                 .raw
                 .get("labels")
                 .and_then(|ls| ls.get(lang))
@@ -302,7 +300,6 @@ impl WikiDataItem {
             {
                 aliases.insert(label.to_string(), true);
             }
-        }
 
         aliases.into_keys().collect()
     }

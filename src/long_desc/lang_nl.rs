@@ -95,8 +95,8 @@ impl LangGenerator for LangNl {
         let occupations = get_claim_item_ids(claims, "P106");
         for (k, occ_q) in occupations.iter().enumerate() {
             let sep = get_sep_after_nl(occupations.len(), k);
-            if state.is_female || state.is_male {
-                if let Some(gendered) = wd
+            if (state.is_female || state.is_male)
+                && let Some(gendered) = wd
                     .get_item(occ_q)
                     .and_then(|i| i.get_gendered_label(&state.lang, state.is_female))
                 {
@@ -104,7 +104,6 @@ impl LangGenerator for LangNl {
                     state.push_text(sep);
                     continue;
                 }
-            }
             state.push_item(occ_q, "", sep);
         }
 
@@ -120,28 +119,28 @@ impl LangGenerator for LangNl {
             .get("P1317")
             .and_then(|v| v.as_array())
             .and_then(|a| a.first())
-            .and_then(|c| extract_claim_date(c));
+            .and_then(extract_claim_date);
         let work_start = claims
             .get("P2031")
             .and_then(|v| v.as_array())
             .and_then(|a| a.first())
-            .and_then(|c| extract_claim_date(c));
+            .and_then(extract_claim_date);
         let work_end = claims
             .get("P2032")
             .and_then(|v| v.as_array())
             .and_then(|a| a.first())
-            .and_then(|c| extract_claim_date(c));
+            .and_then(extract_claim_date);
         if floruit.is_some() || work_start.is_some() || work_end.is_some() {
             let subj = state.pronoun_subject(&CFG);
             let poss = state.pronoun_possessive(&CFG);
             if let Some(ref date) = floruit {
                 state.push_text(&format!("{} was beroepsmatig actief rond ", subj));
                 state.push_text(&self.render_date(date, true));
-            } else if work_start.is_some() && work_end.is_some() {
+            } else if let (Some(from), Some(to)) = (work_start.as_ref(), work_end.as_ref()) {
                 state.push_text(&format!("{} beroepsloopbaan strekte zich uit van ", poss));
-                state.push_text(&self.render_date(work_start.as_ref().unwrap(), true));
+                state.push_text(&self.render_date(from, true));
                 state.push_text(" tot ");
-                state.push_text(&self.render_date(work_end.as_ref().unwrap(), true));
+                state.push_text(&self.render_date(to, true));
             } else if let Some(ref from) = work_start {
                 state.push_text(&format!("{} was beroepsmatig actief vanaf ", subj));
                 state.push_text(&self.render_date(from, true));
@@ -183,12 +182,11 @@ impl LangGenerator for LangNl {
             state.push_text(&format!("<i>{}</i> ", name));
         }
 
-        if let Some(claim) = birthdate {
-            if let Some(date) = extract_claim_date(claim) {
+        if let Some(claim) = birthdate
+            && let Some(date) = extract_claim_date(claim) {
                 state.push_text(&self.render_date(&date, false));
                 state.push_text(" ");
             }
-        }
 
         if let Some(ref place_q) = birthplace {
             state.push_item(place_q, "in ", " ");
@@ -276,11 +274,10 @@ impl LangGenerator for LangNl {
             for (k, item) in employers.iter().enumerate() {
                 state.push_item(&item.q, "", " ");
                 self.push_date_range(state, item);
-                if let Some(job_items) = item.qualifier_items.get("P794") {
-                    if let Some(job_q) = job_items.first() {
+                if let Some(job_items) = item.qualifier_items.get("P794")
+                    && let Some(job_q) = job_items.first() {
                         state.push_item(job_q, "als ", " ");
                     }
-                }
                 let sep = get_sep_after_nl(employers.len(), k);
                 if k + 1 < employers.len() {
                     state.push_text(&format!("{}voor ", sep));
@@ -363,12 +360,11 @@ impl LangGenerator for LangNl {
                 push_simple_list(state, &killers, "door ", " ", get_sep_after_nl);
             }
 
-            if let Some(claim) = deathdate {
-                if let Some(date) = extract_claim_date(claim) {
+            if let Some(claim) = deathdate
+                && let Some(date) = extract_claim_date(claim) {
                     state.push_text(&self.render_date(&date, false));
                     state.push_text(" ");
                 }
-            }
 
             if let Some(ref place_q) = deathplace {
                 state.push_item(place_q, "in ", " ");

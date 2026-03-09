@@ -84,7 +84,11 @@ impl LangGenerator for LangEn {
             if k > 0 {
                 state.push_text("-");
             }
-            let nat = if k > 0 { nationality.to_lowercase() } else { nationality };
+            let nat = if k > 0 {
+                nationality.to_lowercase()
+            } else {
+                nationality
+            };
             state.push_text(&nat);
             if k + 1 == nationalities.len() {
                 state.push_text(" ");
@@ -95,8 +99,8 @@ impl LangGenerator for LangEn {
         let occupations = get_claim_item_ids(claims, "P106");
         for (k, occ_q) in occupations.iter().enumerate() {
             let sep = get_sep_after_en(occupations.len(), k);
-            if state.is_female || state.is_male {
-                if let Some(gendered) = wd
+            if (state.is_female || state.is_male)
+                && let Some(gendered) = wd
                     .get_item(occ_q)
                     .and_then(|i| i.get_gendered_label(&state.lang, state.is_female))
                 {
@@ -104,7 +108,6 @@ impl LangGenerator for LangEn {
                     state.push_text(sep);
                     continue;
                 }
-            }
             state.push_item(occ_q, "", sep);
         }
 
@@ -120,28 +123,28 @@ impl LangGenerator for LangEn {
             .get("P1317")
             .and_then(|v| v.as_array())
             .and_then(|a| a.first())
-            .and_then(|c| extract_claim_date(c));
+            .and_then(extract_claim_date);
         let work_start = claims
             .get("P2031")
             .and_then(|v| v.as_array())
             .and_then(|a| a.first())
-            .and_then(|c| extract_claim_date(c));
+            .and_then(extract_claim_date);
         let work_end = claims
             .get("P2032")
             .and_then(|v| v.as_array())
             .and_then(|a| a.first())
-            .and_then(|c| extract_claim_date(c));
+            .and_then(extract_claim_date);
         if floruit.is_some() || work_start.is_some() || work_end.is_some() {
             let subj = state.pronoun_subject(&CFG);
             let poss = state.pronoun_possessive(&CFG);
             if let Some(ref date) = floruit {
                 state.push_text(&format!("{} was professionally active around ", subj));
                 state.push_text(&self.render_date(date, true));
-            } else if work_start.is_some() && work_end.is_some() {
+            } else if let (Some(from), Some(to)) = (work_start.as_ref(), work_end.as_ref()) {
                 state.push_text(&format!("{} professional career spanned from ", poss));
-                state.push_text(&self.render_date(work_start.as_ref().unwrap(), true));
+                state.push_text(&self.render_date(from, true));
                 state.push_text(" to ");
-                state.push_text(&self.render_date(work_end.as_ref().unwrap(), true));
+                state.push_text(&self.render_date(to, true));
             } else if let Some(ref from) = work_start {
                 state.push_text(&format!("{} was professionally active from ", subj));
                 state.push_text(&self.render_date(from, true));
@@ -167,8 +170,10 @@ impl LangGenerator for LangEn {
     }
 
     fn add_birth_text(&self, state: &mut LongDescState, claims: &Value) {
-        let birthdate =
-            claims.get("P569").and_then(|v| v.as_array()).and_then(|a| a.first());
+        let birthdate = claims
+            .get("P569")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first());
         let birthplace = get_first_claim_item(claims, "P19");
         let birthname = get_first_claim_string(claims, "P513");
 
@@ -184,12 +189,11 @@ impl LangGenerator for LangEn {
             state.push_text(&format!("<i>{}</i> ", name));
         }
 
-        if let Some(claim) = birthdate {
-            if let Some(date) = extract_claim_date(claim) {
+        if let Some(claim) = birthdate
+            && let Some(date) = extract_claim_date(claim) {
                 state.push_text(&self.render_date(&date, false));
                 state.push_text(" ");
             }
-        }
 
         if let Some(ref place_q) = birthplace {
             state.push_item(place_q, "in ", " ");
@@ -258,11 +262,10 @@ impl LangGenerator for LangEn {
             for (k, item) in positions.iter().enumerate() {
                 state.push_item(&item.q, "", " ");
                 self.push_date_range(state, item);
-                if let Some(of_items) = item.qualifier_items.get("P642") {
-                    if let Some(of_q) = of_items.first() {
+                if let Some(of_items) = item.qualifier_items.get("P642")
+                    && let Some(of_q) = of_items.first() {
                         state.push_item(of_q, "for ", " ");
                     }
-                }
                 state.push_text(get_sep_after_en(positions.len(), k));
             }
             state.push_text(". ");
@@ -292,11 +295,10 @@ impl LangGenerator for LangEn {
             for (k, item) in employers.iter().enumerate() {
                 state.push_item(&item.q, "", " ");
                 self.push_date_range(state, item);
-                if let Some(job_items) = item.qualifier_items.get("P794") {
-                    if let Some(job_q) = job_items.first() {
+                if let Some(job_items) = item.qualifier_items.get("P794")
+                    && let Some(job_q) = job_items.first() {
                         state.push_item(job_q, "as ", " ");
                     }
-                }
                 let sep = get_sep_after_en(employers.len(), k);
                 if k + 1 < employers.len() {
                     state.push_text(&format!("{}for ", sep));
@@ -359,8 +361,10 @@ impl LangGenerator for LangEn {
     }
 
     fn add_death_text(&self, state: &mut LongDescState, claims: &Value) {
-        let deathdate =
-            claims.get("P570").and_then(|v| v.as_array()).and_then(|a| a.first());
+        let deathdate = claims
+            .get("P570")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first());
         let deathplace = get_first_claim_item(claims, "P20");
         let has_deathcause = has_claims(claims, "P509");
         let has_killer = has_claims(claims, "P157");
@@ -379,12 +383,11 @@ impl LangGenerator for LangEn {
                 push_simple_list(state, &killers, "by ", " ", get_sep_after_en);
             }
 
-            if let Some(claim) = deathdate {
-                if let Some(date) = extract_claim_date(claim) {
+            if let Some(claim) = deathdate
+                && let Some(date) = extract_claim_date(claim) {
                     state.push_text(&self.render_date(&date, false));
                     state.push_text(" ");
                 }
-            }
 
             if let Some(ref place_q) = deathplace {
                 state.push_item(place_q, "in ", " ");

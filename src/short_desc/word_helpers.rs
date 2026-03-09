@@ -106,8 +106,8 @@ pub(super) fn wiki_urlencode(s: &str) -> String {
 impl ShortDescription {
     /// Apply language-specific word modification (e.g. nationality transformation).
     pub fn txt2(&self, text: &str, key: &str, lang: &str) -> String {
-        if let Some(lang_spec) = self.language_specific.get(lang) {
-            if let Some(key_map) = lang_spec.get(key) {
+        if let Some(lang_spec) = self.language_specific.get(lang)
+            && let Some(key_map) = lang_spec.get(key) {
                 let link_re = html_link_re();
                 if let Some(caps) = link_re.captures(text) {
                     let inner = caps.get(2).unwrap().as_str();
@@ -123,7 +123,6 @@ impl ShortDescription {
                     return replacement.clone();
                 }
             }
-        }
         text.to_string()
     }
 

@@ -178,8 +178,8 @@ fn cached_response(cached_json: String, args: &ApiParams) -> Response {
             Html(html).into_response()
         }
         _ => {
-            if let Some(ref callback) = args.callback {
-                if !callback.is_empty() {
+            if let Some(ref callback) = args.callback
+                && !callback.is_empty() {
                     let jsonp = format!("{}({})", callback, cached_json);
                     return (
                         StatusCode::OK,
@@ -188,7 +188,6 @@ fn cached_response(cached_json: String, args: &ApiParams) -> Response {
                     )
                         .into_response();
                 }
-            }
             (
                 StatusCode::OK,
                 [("content-type", "application/json; charset=utf-8")],
@@ -379,8 +378,8 @@ async fn api_handler(
             let json_str = serde_json::to_string(&response).unwrap_or_default();
 
             // Support JSONP callback
-            if let Some(ref callback) = args.callback {
-                if !callback.is_empty() {
+            if let Some(ref callback) = args.callback
+                && !callback.is_empty() {
                     let jsonp = format!("{}({})", callback, json_str);
                     return (
                         StatusCode::OK,
@@ -389,7 +388,6 @@ async fn api_handler(
                     )
                         .into_response();
                 }
-            }
 
             (
                 StatusCode::OK,

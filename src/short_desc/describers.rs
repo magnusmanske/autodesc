@@ -114,14 +114,13 @@ impl ShortDescription {
             if let Some(occ_labels) = item_labels.get_mut(&106) {
                 for label in occ_labels.iter_mut() {
                     let (_full, before, inner, after) = split_link(label);
-                    if let Some(q) = p106_label_to_qid.get(&inner) {
-                        if let Some(gendered) = wd
+                    if let Some(q) = p106_label_to_qid.get(&inner)
+                        && let Some(gendered) = wd
                             .get_item(q)
                             .and_then(|i| i.get_gendered_label(lang, is_female))
                         {
                             *label = format!("{}{}{}", before, gendered, after);
                         }
-                    }
                 }
             }
         }
@@ -342,11 +341,10 @@ impl ShortDescription {
                 }
             }
 
-            if let Some(rank_id) = taxon_rank_index(&taxon_rank) {
-                if rank_id < taxa_cache.len() {
+            if let Some(rank_id) = taxon_rank_index(&taxon_rank)
+                && rank_id < taxa_cache.len() {
                     taxa_cache[rank_id] = Some(binding.clone());
                 }
-            }
         }
 
         for binding in taxa_cache.iter().flatten() {

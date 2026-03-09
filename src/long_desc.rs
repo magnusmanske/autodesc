@@ -430,11 +430,10 @@ pub(super) fn add_claim_items(claims: &Value, prop: &str, items: &mut Vec<String
         None => return,
     };
     for claim in arr {
-        if let Some(q) = WikiDataItem::get_claim_target_item_id(claim) {
-            if !items.contains(&q) {
+        if let Some(q) = WikiDataItem::get_claim_target_item_id(claim)
+            && !items.contains(&q) {
                 items.push(q);
             }
-        }
     }
 }
 
@@ -445,8 +444,8 @@ fn add_qualifier_items(claims: &Value, prop: &str, qual_prop: &str, items: &mut 
         None => return,
     };
     for claim in arr {
-        if let Some(qualifiers) = claim.get("qualifiers") {
-            if let Some(qual_arr) = qualifiers.get(qual_prop).and_then(|v| v.as_array()) {
+        if let Some(qualifiers) = claim.get("qualifiers")
+            && let Some(qual_arr) = qualifiers.get(qual_prop).and_then(|v| v.as_array()) {
                 for qual in qual_arr {
                     if let Some(q) = qual
                         .get("datavalue")
@@ -471,7 +470,6 @@ fn add_qualifier_items(claims: &Value, prop: &str, qual_prop: &str, items: &mut 
                     }
                 }
             }
-        }
     }
 }
 

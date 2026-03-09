@@ -2,7 +2,7 @@
 name = "autodesc"
 version = "0.2.0"
 authors = ["Magnus Manske <magnusmanske@googlemail.com>"]
-edition = "2021"
+edition = "2024"
 description = "Automatic description generator for Wikidata items"
 
 [[bin]]

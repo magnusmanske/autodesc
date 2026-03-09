@@ -72,13 +72,12 @@ impl WikiData {
                 continue;
             }
             // Check global item cache before scheduling an API fetch.
-            if let Some(cache) = &self.item_cache {
-                if let Some(item) = cache.get(&q).await {
+            if let Some(cache) = &self.item_cache
+                && let Some(item) = cache.get(&q).await {
                     self.items.insert(q.clone(), item);
                     seen.insert(q);
                     continue;
                 }
-            }
             seen.insert(q.clone());
             to_load.push(q);
         }
@@ -174,8 +173,8 @@ impl WikiData {
                 .and_then(|v| v.get("time"))
                 .and_then(|t| t.as_str());
 
-            if let Some(time_str) = time_str {
-                if let Some(caps) = re.captures(time_str) {
+            if let Some(time_str) = time_str
+                && let Some(caps) = re.captures(time_str) {
                     let sign = caps.get(1).map(|m| m.as_str()).unwrap_or("+");
                     let year = caps.get(2).map(|m| m.as_str()).unwrap_or("");
                     let mut ret = year.to_string();
@@ -189,7 +188,6 @@ impl WikiData {
                     }
                     return ret;
                 }
-            }
         }
 
         String::new()

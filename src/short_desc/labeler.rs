@@ -180,12 +180,11 @@ impl ShortDescription {
             return;
         }
 
-        if let Some(pfx) = args.prefix {
-            if !h.is_empty() {
+        if let Some(pfx) = args.prefix
+            && !h.is_empty() {
                 let last = h.len() - 1;
                 h[last].push_str(pfx);
             }
-        }
 
         let s = self.list_words(&h2, args.hints, lang);
         if let Some(key) = args.txt_key {
@@ -209,11 +208,10 @@ impl ShortDescription {
         lang: &str,
         wd: &WikiData,
     ) -> String {
-        if let Some(q) = country_q {
-            if let Some(demonym) = wd.get_item(q).and_then(|item| item.get_demonym(lang)) {
+        if let Some(q) = country_q
+            && let Some(demonym) = wd.get_item(q).and_then(|item| item.get_demonym(lang)) {
                 return demonym;
             }
-        }
         self.txt2(country_label, "nationality", lang)
     }
 }
