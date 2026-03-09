@@ -282,17 +282,14 @@ mod tests {
 
     #[test]
     fn test_split_link() {
-        let (_, before, inner, after) = split_link("<a href='test'>Hello</a>");
+        let (_, before, inner, after) = split_link("<a href='test'>Hello</a>").unwrap();
         assert_eq!(before, "<a href='test'>");
         assert_eq!(inner, "Hello");
         assert_eq!(after, "</a>");
 
-        let (_, before, inner, after) = split_link("plain text");
-        assert_eq!(before, "");
-        assert_eq!(inner, "plain text");
-        assert_eq!(after, "");
+        assert!(split_link("plain text").is_none());
 
-        let (_, before, inner, after) = split_link("[[Page|Label]]");
+        let (_, before, inner, after) = split_link("[[Page|Label]]").unwrap();
         assert_eq!(before, "[[Page|");
         assert_eq!(inner, "Label");
         assert_eq!(after, "]]");

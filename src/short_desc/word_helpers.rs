@@ -58,36 +58,37 @@ pub(super) fn uc_first(s: &str) -> String {
 }
 
 /// Split a link string into parts: (full_match, before, inner_text, after).
-pub(super) fn split_link(v: &str) -> (String, String, String, String) {
+/// Returns `None` for plain (non-link) text.
+pub(super) fn split_link(v: &str) -> Option<(String, String, String, String)> {
     if let Some(caps) = split_link_wiki_pipe_re().captures(v) {
-        return (
-            caps.get(0).unwrap().as_str().to_string(),
-            caps.get(1).unwrap().as_str().to_string(),
-            caps.get(2).unwrap().as_str().to_string(),
-            caps.get(3).unwrap().as_str().to_string(),
-        );
+        return Some((
+            caps.get(0)?.as_str().to_string(),
+            caps.get(1)?.as_str().to_string(),
+            caps.get(2)?.as_str().to_string(),
+            caps.get(3)?.as_str().to_string(),
+        ));
     }
 
     if let Some(caps) = split_link_wiki_re().captures(v) {
-        let inner = caps.get(2).unwrap().as_str();
-        return (
-            caps.get(0).unwrap().as_str().to_string(),
+        let inner = caps.get(2)?.as_str();
+        return Some((
+            caps.get(0)?.as_str().to_string(),
             format!("[[{}|", inner),
             inner.to_string(),
-            caps.get(3).unwrap().as_str().to_string(),
-        );
+            caps.get(3)?.as_str().to_string(),
+        ));
     }
 
     if let Some(caps) = html_link_re().captures(v) {
-        return (
-            caps.get(0).unwrap().as_str().to_string(),
-            caps.get(1).unwrap().as_str().to_string(),
-            caps.get(2).unwrap().as_str().to_string(),
-            caps.get(3).unwrap().as_str().to_string(),
-        );
+        return Some((
+            caps.get(0)?.as_str().to_string(),
+            caps.get(1)?.as_str().to_string(),
+            caps.get(2)?.as_str().to_string(),
+            caps.get(3)?.as_str().to_string(),
+        ));
     }
 
-    (String::new(), String::new(), v.to_string(), String::new())
+    None
 }
 
 /// Clean up extra spaces and punctuation artifacts.

@@ -82,7 +82,9 @@ impl ShortDescription {
         let mut h2 = String::new();
 
         for (k, v) in nationality_items.iter().enumerate() {
-            let (_full, before, inner, after) = split_link(v);
+            let (before, inner, after) = split_link(v)
+                .map(|(_, b, i, a)| (b, i, a))
+                .unwrap_or_else(|| (String::new(), v.to_string(), String::new()));
             let country_q = p27_label_to_qid.get(&inner).map(String::as_str);
             let s = self.get_nationality_from_country(&inner, country_q, lang, wd);
             if k == 0 {
@@ -113,7 +115,9 @@ impl ShortDescription {
                 .collect();
             if let Some(occ_labels) = item_labels.get_mut(&106) {
                 for label in occ_labels.iter_mut() {
-                    let (_full, before, inner, after) = split_link(label);
+                    let (before, inner, after) = split_link(label)
+                        .map(|(_, b, i, a)| (b, i, a))
+                        .unwrap_or_else(|| (String::new(), label.to_string(), String::new()));
                     if let Some(q) = p106_label_to_qid.get(&inner)
                         && let Some(gendered) = wd
                             .get_item(q)
