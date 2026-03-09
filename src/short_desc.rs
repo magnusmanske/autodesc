@@ -33,6 +33,15 @@ fn clean_space_comma_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r" ,").expect("regex is valid"))
 }
 
+/// Arguments for [`ShortDescription::add2desc`].
+/// Bundling them reduces the argument count below the clippy `too_many_arguments` threshold.
+struct Add2DescArgs<'a> {
+    props: &'a [u64],
+    hints: &'a HashMap<String, bool>,
+    prefix: Option<&'a str>,
+    txt_key: Option<&'a str>,
+}
+
 /// The short description generator, ported from the Python `ShortDescription` class.
 pub struct ShortDescription {
     pub stock: HashMap<String, HashMap<String, String>>,
@@ -449,14 +458,11 @@ impl ShortDescription {
         &self,
         h: &mut Vec<String>,
         item_labels: &HashMap<u64, Vec<String>>,
-        props: &[u64],
-        hints: &HashMap<String, bool>,
-        prefix: Option<&str>,
-        txt_key: Option<&str>,
+        args: Add2DescArgs<'_>,
         lang: &str,
     ) {
         let mut h2: Vec<String> = Vec::new();
-        for prop in props {
+        for prop in args.props {
             if let Some(labels) = item_labels.get(prop) {
                 h2.extend(labels.clone());
             }
@@ -466,15 +472,15 @@ impl ShortDescription {
             return;
         }
 
-        if let Some(pfx) = prefix {
+        if let Some(pfx) = args.prefix {
             if !h.is_empty() {
                 let last_idx = h.len() - 1;
                 h[last_idx].push_str(pfx);
             }
         }
 
-        let s = self.list_words(&h2, hints, lang);
-        if let Some(key) = txt_key {
+        let s = self.list_words(&h2, args.hints, lang);
+        if let Some(key) = args.txt_key {
             if lang == "te" {
                 h.push(format!("{} {}", s, self.txt(key, lang)));
             } else {
@@ -625,7 +631,17 @@ impl ShortDescription {
             hints.insert("is_female".to_string(), true);
         }
         hints.insert("occupation".to_string(), true);
-        self.add2desc(&mut h, &item_labels, &[31, 106], &hints, None, None, lang);
+        self.add2desc(
+            &mut h,
+            &item_labels,
+            Add2DescArgs {
+                props: &[31, 106],
+                hints: &hints,
+                prefix: None,
+                txt_key: None,
+            },
+            lang,
+        );
         if h.len() == ol {
             h.push(self.txt("person", lang));
         }
@@ -644,10 +660,12 @@ impl ShortDescription {
         self.add2desc(
             &mut h,
             &item_labels,
-            &[39],
-            &office_hints,
-            Some(","),
-            None,
+            Add2DescArgs {
+                props: &[39],
+                hints: &office_hints,
+                prefix: Some(","),
+                txt_key: None,
+            },
             lang,
         );
 
@@ -675,10 +693,12 @@ impl ShortDescription {
         self.add2desc(
             &mut h,
             &item_labels,
-            &[166],
-            &empty_hints,
-            Some(";"),
-            None,
+            Add2DescArgs {
+                props: &[166],
+                hints: &empty_hints,
+                prefix: Some(";"),
+                txt_key: None,
+            },
             lang,
         );
 
@@ -686,10 +706,12 @@ impl ShortDescription {
         self.add2desc(
             &mut h,
             &item_labels,
-            &[463],
-            &empty_hints,
-            Some(";"),
-            Some("member of"),
+            Add2DescArgs {
+                props: &[463],
+                hints: &empty_hints,
+                prefix: Some(";"),
+                txt_key: Some("member of"),
+            },
             lang,
         );
 
@@ -697,10 +719,12 @@ impl ShortDescription {
         self.add2desc(
             &mut h,
             &item_labels,
-            &[22, 25],
-            &empty_hints,
-            Some(";"),
-            Some("child of"),
+            Add2DescArgs {
+                props: &[22, 25],
+                hints: &empty_hints,
+                prefix: Some(";"),
+                txt_key: Some("child of"),
+            },
             lang,
         );
 
@@ -708,10 +732,12 @@ impl ShortDescription {
         self.add2desc(
             &mut h,
             &item_labels,
-            &[26],
-            &empty_hints,
-            Some(";"),
-            Some("spouse of"),
+            Add2DescArgs {
+                props: &[26],
+                hints: &empty_hints,
+                prefix: Some(";"),
+                txt_key: Some("spouse of"),
+            },
             lang,
         );
 
@@ -939,10 +965,12 @@ impl ShortDescription {
         self.add2desc(
             &mut h,
             &item_labels,
-            &[279, 31, 1269, 60, 105],
-            &empty_hints,
-            None,
-            None,
+            Add2DescArgs {
+                props: &[279, 31, 1269, 60, 105],
+                hints: &empty_hints,
+                prefix: None,
+                txt_key: None,
+            },
             lang,
         );
 
@@ -986,127 +1014,155 @@ impl ShortDescription {
         self.add2desc(
             &mut h,
             &item_labels,
-            &[175, 86, 170, 57, 50, 61, 176],
-            &empty_hints,
-            None,
-            Some("by"),
+            Add2DescArgs {
+                props: &[175, 86, 170, 57, 50, 61, 176],
+                hints: &empty_hints,
+                prefix: None,
+                txt_key: Some("by"),
+            },
             lang,
         );
         self.add2desc(
             &mut h,
             &item_labels,
-            &[162],
-            &empty_hints,
-            Some(","),
-            Some("produced by"),
+            Add2DescArgs {
+                props: &[162],
+                hints: &empty_hints,
+                prefix: Some(","),
+                txt_key: Some("produced by"),
+            },
             lang,
         );
         self.add2desc(
             &mut h,
             &item_labels,
-            &[306, 400],
-            &empty_hints,
-            None,
-            Some("for"),
+            Add2DescArgs {
+                props: &[306, 400],
+                hints: &empty_hints,
+                prefix: None,
+                txt_key: Some("for"),
+            },
             lang,
         );
         self.add2desc(
             &mut h,
             &item_labels,
-            &[264, 123],
-            &empty_hints,
-            None,
-            Some("from"),
+            Add2DescArgs {
+                props: &[264, 123],
+                hints: &empty_hints,
+                prefix: None,
+                txt_key: Some("from"),
+            },
             lang,
         );
         self.add2desc(
             &mut h,
             &item_labels,
-            &[361],
-            &empty_hints,
-            Some(","),
-            Some("part of"),
+            Add2DescArgs {
+                props: &[361],
+                hints: &empty_hints,
+                prefix: Some(","),
+                txt_key: Some("part of"),
+            },
             lang,
         );
         self.add2desc(
             &mut h,
             &item_labels,
-            &[138],
-            &empty_hints,
-            Some(","),
-            Some("named after"),
+            Add2DescArgs {
+                props: &[138],
+                hints: &empty_hints,
+                prefix: Some(","),
+                txt_key: Some("named after"),
+            },
             lang,
         );
         self.add2desc(
             &mut h,
             &item_labels,
-            &[425],
-            &empty_hints,
-            Some(","),
-            Some("in the field of"),
+            Add2DescArgs {
+                props: &[425],
+                hints: &empty_hints,
+                prefix: Some(","),
+                txt_key: Some("in the field of"),
+            },
             lang,
         );
         self.add2desc(
             &mut h,
             &item_labels,
-            &[171],
-            &empty_hints,
-            None,
-            Some("of"),
+            Add2DescArgs {
+                props: &[171],
+                hints: &empty_hints,
+                prefix: None,
+                txt_key: Some("of"),
+            },
             lang,
         );
         self.add2desc(
             &mut h,
             &item_labels,
-            &[59],
-            &empty_hints,
-            None,
-            Some("in the constellation"),
+            Add2DescArgs {
+                props: &[59],
+                hints: &empty_hints,
+                prefix: None,
+                txt_key: Some("in the constellation"),
+            },
             lang,
         );
         self.add2desc(
             &mut h,
             &item_labels,
-            &[1433],
-            &empty_hints,
-            None,
-            Some("published in"),
+            Add2DescArgs {
+                props: &[1433],
+                hints: &empty_hints,
+                prefix: None,
+                txt_key: Some("published in"),
+            },
             lang,
         );
         self.add2desc(
             &mut h,
             &item_labels,
-            &[585],
-            &empty_hints,
-            None,
-            Some("in"),
+            Add2DescArgs {
+                props: &[585],
+                hints: &empty_hints,
+                prefix: None,
+                txt_key: Some("in"),
+            },
             lang,
         );
         self.add2desc(
             &mut h,
             &item_labels,
-            &[703],
-            &empty_hints,
-            None,
-            Some("found_in"),
+            Add2DescArgs {
+                props: &[703],
+                hints: &empty_hints,
+                prefix: None,
+                txt_key: Some("found_in"),
+            },
             lang,
         );
         self.add2desc(
             &mut h,
             &item_labels,
-            &[1080, 1441],
-            &empty_hints,
-            None,
-            Some("from"),
+            Add2DescArgs {
+                props: &[1080, 1441],
+                hints: &empty_hints,
+                prefix: None,
+                txt_key: Some("from"),
+            },
             lang,
         );
         self.add2desc(
             &mut h,
             &item_labels,
-            &[921],
-            &empty_hints,
-            None,
-            Some("about"),
+            Add2DescArgs {
+                props: &[921],
+                hints: &empty_hints,
+                prefix: None,
+                txt_key: Some("about"),
+            },
             lang,
         );
 
