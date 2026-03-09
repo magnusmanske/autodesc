@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::desc_options::DescOptions;
+use crate::long_desc;
 use crate::wikidata::{sanitize_q, WikiData};
 
 mod claims;
@@ -67,6 +68,16 @@ impl ShortDescription {
                     .unwrap_or(serde_json::Value::Object(serde_json::Map::new()))
             })
             .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+        // Try long description if mode=long
+        if opt.mode == "long" {
+            if let Some(long_result) =
+                long_desc::generate_long_description(self, &q, &claims, opt, wd).await
+            {
+                return (q, long_result);
+            }
+            // Fall through to short description if long is not available
+        }
 
         if Self::is_person(&claims) {
             self.describe_person(&q, &claims, opt, wd).await

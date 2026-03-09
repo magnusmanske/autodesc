@@ -199,7 +199,7 @@ impl ShortDescription {
         }
     }
 
-    pub(super) fn get_nationality_from_country(
+    pub fn get_nationality_from_country(
         &self,
         country: &str,
         _claims: &serde_json::Value,

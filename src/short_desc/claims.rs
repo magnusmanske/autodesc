@@ -58,6 +58,16 @@ impl ShortDescription {
         Self::has_pq(claims, 107, 11651459)
     }
 
+    /// Public version of `has_pq` for use by other modules (e.g. long_desc).
+    pub fn has_pq_public(claims: &serde_json::Value, p: u64, q: u64) -> bool {
+        Self::has_pq(claims, p, q)
+    }
+
+    /// Public version of `is_person` for use by other modules (e.g. long_desc).
+    pub fn is_person_public(claims: &serde_json::Value) -> bool {
+        Self::is_person(claims)
+    }
+
     /// Extract items from claims for a given (numeric) property. Returns [(prop_num, qid), ...].
     pub(super) fn add_items_from_claims(
         claims: &serde_json::Value,
