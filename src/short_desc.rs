@@ -14,6 +14,11 @@ use regex::Regex;
 use crate::desc_options::DescOptions;
 use crate::wikidata::{sanitize_q, WikiData, WikiDataItem, MAIN_LANGUAGES};
 
+fn entity_url_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^.+?entity/").expect("regex is valid"))
+}
+
 fn split_link_wiki_pipe_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"^(\[\[.+\|)(.+)(\]\])$").expect("regex is valid"))
@@ -781,7 +786,7 @@ impl ShortDescription {
             .cloned()
             .unwrap_or_default();
 
-        let entity_re = Regex::new(r"^.+?entity/").unwrap();
+        let entity_re = entity_url_re();
 
         let mut taxon_name: Option<String> = None;
         let mut taxa_cache: Vec<Option<serde_json::Value>> = vec![None; 9];
