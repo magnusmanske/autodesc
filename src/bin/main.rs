@@ -12,6 +12,7 @@ use moka::future::Cache;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tower_http::cors::CorsLayer;
+use tower_http::timeout::TimeoutLayer;
 
 use autodesc::desc_options::DescOptions;
 use autodesc::media::MediaGenerator;
@@ -415,7 +416,8 @@ async fn main() {
     let app = Router::new()
         .route("/", get(api_handler))
         .with_state(state)
-        .layer(CorsLayer::permissive());
+        .layer(CorsLayer::permissive())
+        .layer(TimeoutLayer::new(Duration::from_secs(60)));
 
     let address = std::env::var("AUTODESC_ADDRESS")
         .ok()
