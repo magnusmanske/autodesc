@@ -311,9 +311,13 @@ async fn api_handler(
         }
     }
 
-    // Serialize the response and store in the output cache for future requests.
+    // Serialize the response and store in the output cache, but skip caching
+    // error results so they can be retried on the next request.
     let cached_json = serde_json::to_string(&response).unwrap_or_default();
-    state.output_cache.insert(output_key, cached_json).await;
+    let cannot_describe = format!("<i>{}</i>", sd.txt("cannot_describe", &args.lang));
+    if response.result != cannot_describe {
+        state.output_cache.insert(output_key, cached_json).await;
+    }
 
     // Format the response
     match args.format.as_str() {
