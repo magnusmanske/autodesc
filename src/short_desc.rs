@@ -620,17 +620,15 @@ impl ShortDescription {
         // Nationality
         let nationality_items = item_labels.get(&27).cloned().unwrap_or_default();
         let mut h2 = String::new();
-        let total = nationality_items.len();
+
         for (k, v) in nationality_items.iter().enumerate() {
             let (_full, before, inner, after) = Self::split_link(v);
-            let not_last = k + 1 != total;
             let s = self.get_nationality_from_country(&inner, claims, lang);
             if k == 0 {
                 h2 = format!("{}{}{}", before, s, after);
             } else {
                 h2 = format!("{}-{}{}{}", h2, before, s.to_lowercase(), after);
             }
-            let _ = not_last; // Used in some languages for nationality inflection
         }
         if !h2.is_empty() {
             h.push(h2);

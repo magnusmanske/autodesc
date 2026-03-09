@@ -14,7 +14,7 @@ use tower_http::cors::CorsLayer;
 use autodesc::desc_options::DescOptions;
 use autodesc::media::MediaGenerator;
 use autodesc::short_desc::ShortDescription;
-use autodesc::wikidata::WikiData;
+use autodesc::wikidata::{sanitize_q, WikiData};
 
 const DEFAULT_LANGUAGE: &str = "en";
 
@@ -149,12 +149,8 @@ async fn api_handler(Query(params): Query<ApiParams>) -> Response {
         _ => return Html(INDEX_HTML.to_string()).into_response(),
     };
 
-    // Normalize Q-id
-    let q = if q_raw.chars().all(|c| c.is_ascii_digit()) {
-        format!("Q{}", q_raw)
-    } else {
-        q_raw.to_uppercase()
-    };
+    // Normalize Q-id (handles pure digits, mixed case, leading/trailing whitespace).
+    let q = sanitize_q(&q_raw);
     args.q = Some(q.clone());
 
     // Create a fresh WikiData client per request
@@ -171,11 +167,7 @@ async fn api_handler(Query(params): Query<ApiParams>) -> Response {
     };
 
     // Generate description
-    let result = sd.load_item(&q, &mut opt, &mut wd).await;
-    let (result_q, result_html) = result;
-
-    let _ = result_q;
-    let output = result_html;
+    let (_result_q, output) = sd.load_item(&q, &mut opt, &mut wd).await;
 
     // Get label and manual description
     let label = wd

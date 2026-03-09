@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -50,7 +50,7 @@ impl WikiData {
     /// Entities already in the cache are skipped.
     pub async fn get_item_batch(&mut self, item_list: &[String]) -> anyhow::Result<()> {
         let mut to_load: Vec<String> = Vec::new();
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
 
         for q in item_list {
             let q = sanitize_q(q);
