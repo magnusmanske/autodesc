@@ -214,6 +214,7 @@ impl ShortDescription {
     }
 
     /// Check if claims have a specific P/Q link (both numeric).
+    /// Handles both the newer `"id": "Q<n>"` format and the older `"numeric-id": <n>` format.
     fn has_pq(claims: &serde_json::Value, p: u64, q: u64) -> bool {
         let prop = format!("P{}", p);
         let claims_arr = match claims.get(&prop).and_then(|v| v.as_array()) {
@@ -221,14 +222,35 @@ impl ShortDescription {
             None => return false,
         };
 
+        let q_str = format!("Q{}", q);
+
         for v in claims_arr {
-            let nid = v
+            let value = match v
                 .get("mainsnak")
                 .and_then(|ms| ms.get("datavalue"))
                 .and_then(|dv| dv.get("value"))
-                .and_then(|val| val.get("numeric-id"))
-                .and_then(|n| n.as_u64());
-            if nid == Some(q) {
+            {
+                Some(val) => val,
+                None => continue,
+            };
+
+            // Newer API format: "id": "Q<n>"
+            if value
+                .get("id")
+                .and_then(|i| i.as_str())
+                .map(|id| id == q_str)
+                .unwrap_or(false)
+            {
+                return true;
+            }
+
+            // Older API format: "numeric-id": <n>
+            if value
+                .get("numeric-id")
+                .and_then(|n| n.as_u64())
+                .map(|n| n == q)
+                .unwrap_or(false)
+            {
                 return true;
             }
         }
@@ -1286,6 +1308,46 @@ mod tests {
         assert!(ShortDescription::has_pq(&claims, 31, 5));
         assert!(!ShortDescription::has_pq(&claims, 31, 42));
         assert!(!ShortDescription::has_pq(&claims, 99, 5));
+    }
+
+    #[test]
+    fn test_has_pq_newer_id_format() {
+        // Wikidata now returns "id": "Q5" instead of "numeric-id": 5
+        let claims = serde_json::json!({
+            "P31": [
+                {
+                    "mainsnak": {
+                        "datavalue": {
+                            "value": {
+                                "entity-type": "item",
+                                "id": "Q5"
+                            }
+                        }
+                    }
+                }
+            ]
+        });
+        assert!(ShortDescription::has_pq(&claims, 31, 5));
+        assert!(!ShortDescription::has_pq(&claims, 31, 42));
+    }
+
+    #[test]
+    fn test_has_pq_missing_mainsnak_continues() {
+        // A claim with no mainsnak should be skipped, not cause a false negative
+        // for subsequent valid claims.
+        let claims = serde_json::json!({
+            "P31": [
+                {},
+                {
+                    "mainsnak": {
+                        "datavalue": {
+                            "value": { "numeric-id": 5 }
+                        }
+                    }
+                }
+            ]
+        });
+        assert!(ShortDescription::has_pq(&claims, 31, 5));
     }
 
     #[test]
