@@ -57,13 +57,25 @@ impl ShortDescription {
         let lang = &opt.lang;
         let mut h: Vec<String> = Vec::new();
 
+        // Build a map from country label → Q-id for P1549 demonym lookup.
+        // Items are already cached in `wd` after `label_items`.
+        let p27_label_to_qid: std::collections::HashMap<String, String> = load_items
+            .iter()
+            .filter(|(p, _)| *p == 27)
+            .filter_map(|(_, q)| {
+                let label = wd.get_item(q)?.get_label(Some(lang));
+                if label == *q { None } else { Some((label, q.clone())) }
+            })
+            .collect();
+
         // Nationality
         let nationality_items = item_labels.get(&27).cloned().unwrap_or_default();
         let mut h2 = String::new();
 
         for (k, v) in nationality_items.iter().enumerate() {
             let (_full, before, inner, after) = split_link(v);
-            let s = self.get_nationality_from_country(&inner, claims, lang);
+            let country_q = p27_label_to_qid.get(&inner).map(String::as_str);
+            let s = self.get_nationality_from_country(&inner, country_q, lang, wd);
             if k == 0 {
                 h2 = format!("{}{}{}", before, s, after);
             } else {

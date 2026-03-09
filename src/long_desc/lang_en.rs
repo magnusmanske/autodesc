@@ -79,7 +79,8 @@ impl LangGenerator for LangEn {
                 .get_item(country_q)
                 .map(|i| i.get_label(Some(&state.lang)))
                 .unwrap_or_default();
-            let nationality = sd.get_nationality_from_country(&country_label, claims, &state.lang);
+            let nationality =
+                sd.get_nationality_from_country(&country_label, Some(country_q), &state.lang, wd);
             if k > 0 {
                 state.push_text("-");
             }

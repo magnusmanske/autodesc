@@ -199,12 +199,21 @@ impl ShortDescription {
         }
     }
 
+    /// Return the demonym for `country_label` in `lang`.
+    /// Tries P1549 on the Wikidata country item first; falls back to the
+    /// hardcoded nationality table (`txt2`).
     pub fn get_nationality_from_country(
         &self,
-        country: &str,
-        _claims: &serde_json::Value,
+        country_label: &str,
+        country_q: Option<&str>,
         lang: &str,
+        wd: &WikiData,
     ) -> String {
-        self.txt2(country, "nationality", lang)
+        if let Some(q) = country_q {
+            if let Some(demonym) = wd.get_item(q).and_then(|item| item.get_demonym(lang)) {
+                return demonym;
+            }
+        }
+        self.txt2(country_label, "nationality", lang)
     }
 }

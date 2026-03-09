@@ -122,6 +122,28 @@ impl WikiDataItem {
         fallback
     }
 
+    /// Get the demonym (P1549) for this item in the given language.
+    /// P1549 values are monolingualtext, so we look for the one matching `lang`.
+    pub fn get_demonym(&self, lang: &str) -> Option<String> {
+        let claims = self.get_claims_for_property("P1549");
+        for claim in &claims {
+            if let Some(value) = claim
+                .get("mainsnak")
+                .and_then(|s| s.get("datavalue"))
+                .and_then(|dv| dv.get("value"))
+            {
+                let claim_lang = value.get("language").and_then(|l| l.as_str());
+                let text = value.get("text").and_then(|t| t.as_str());
+                if let (Some(cl), Some(t)) = (claim_lang, text) {
+                    if cl == lang {
+                        return Some(t.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
     pub fn get_desc(&self, language: Option<&str>) -> String {
         if let Some(lang) = language {
             return self
@@ -574,6 +596,36 @@ mod tests {
         assert_eq!(ids.len(), 2);
         assert!(ids.contains(&"Q5".to_string()));
         assert!(ids.contains(&"Q6256".to_string()));
+    }
+
+    #[test]
+    fn test_get_demonym() {
+        let raw = serde_json::json!({
+            "claims": {
+                "P1549": [
+                    {
+                        "mainsnak": {
+                            "datavalue": {
+                                "type": "monolingualtext",
+                                "value": { "text": "British", "language": "en" }
+                            }
+                        }
+                    },
+                    {
+                        "mainsnak": {
+                            "datavalue": {
+                                "type": "monolingualtext",
+                                "value": { "text": "Britannique", "language": "fr" }
+                            }
+                        }
+                    }
+                ]
+            }
+        });
+        let item = WikiDataItem::new(raw);
+        assert_eq!(item.get_demonym("en"), Some("British".to_string()));
+        assert_eq!(item.get_demonym("fr"), Some("Britannique".to_string()));
+        assert_eq!(item.get_demonym("de"), None);
     }
 
     #[test]
