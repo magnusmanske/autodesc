@@ -1009,18 +1009,18 @@ impl ShortDescription {
             h.push(format!("{} {}", self.txt("in", lang), h3.join(sep)));
         }
 
-        // Population
-        if let Some(item) = wd.get_item(q) {
-            if item.has_claims("P1082") {
-                let cl = item.get_claims_for_property("P1082");
-                if let Some(best) = WikiDataItem::get_best_quantity(&cl) {
-                    let pop_label = wd
-                        .get_item("P1082")
-                        .map(|i| i.get_label(Some(lang)))
-                        .unwrap_or_else(|| "population".to_string());
-                    h.push(format!(", {} {}", pop_label, best));
-                }
-            }
+        // Population — use the claims value already in scope instead of re-fetching the item.
+        let pop_claims = claims
+            .get("P1082")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if let Some(best) = WikiDataItem::get_best_quantity(&pop_claims) {
+            let pop_label = wd
+                .get_item("P1082")
+                .map(|i| i.get_label(Some(lang)))
+                .unwrap_or_else(|| "population".to_string());
+            h.push(format!(", {} {}", pop_label, best));
         }
 
         // Creator etc
