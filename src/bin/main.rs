@@ -1,12 +1,14 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use axum::{
-    extract::Query,
+    extract::{Query, State},
     http::StatusCode,
     response::{Html, IntoResponse, Response},
     routing::get,
     Router,
 };
+use moka::future::Cache;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tower_http::cors::CorsLayer;
@@ -14,7 +16,57 @@ use tower_http::cors::CorsLayer;
 use autodesc::desc_options::DescOptions;
 use autodesc::media::MediaGenerator;
 use autodesc::short_desc::ShortDescription;
-use autodesc::wikidata::{sanitize_q, WikiData};
+use autodesc::wikidata::{sanitize_q, WikiData, WikiDataItem};
+
+/// Shared application state holding both global caches.
+#[derive(Clone)]
+struct AppState {
+    /// Cache of Wikidata items (Q-id → WikiDataItem).
+    item_cache: Cache<String, WikiDataItem>,
+    /// Cache of generated output strings (cache-key → output).
+    output_cache: Cache<String, String>,
+}
+
+impl AppState {
+    fn new() -> Self {
+        let item_ttl = std::env::var("AUTODESC_ITEM_CACHE_TTL_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(3600); // 1 hour
+        let item_size = std::env::var("AUTODESC_ITEM_CACHE_SIZE")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(10_000);
+
+        let output_ttl = std::env::var("AUTODESC_OUTPUT_CACHE_TTL_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(600); // 10 minutes
+        let output_size = std::env::var("AUTODESC_OUTPUT_CACHE_SIZE")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(1_000);
+
+        tracing::info!(
+            item_ttl,
+            item_size,
+            output_ttl,
+            output_size,
+            "Cache configuration"
+        );
+
+        Self {
+            item_cache: Cache::builder()
+                .max_capacity(item_size)
+                .time_to_live(Duration::from_secs(item_ttl))
+                .build(),
+            output_cache: Cache::builder()
+                .max_capacity(output_size)
+                .time_to_live(Duration::from_secs(output_ttl))
+                .build(),
+        }
+    }
+}
 
 const DEFAULT_LANGUAGE: &str = "en";
 
@@ -82,7 +134,74 @@ struct ApiResponse {
     thumbnails: Option<Value>,
 }
 
-async fn api_handler(Query(params): Query<ApiParams>) -> Response {
+/// Build a response from a cached JSON string, applying the requested format.
+fn cached_response(cached_json: String, args: &ApiParams) -> Response {
+    match args.format.as_str() {
+        "html" => {
+            let v: Value = serde_json::from_str(&cached_json).unwrap_or_default();
+            let label = v["label"].as_str().unwrap_or("").to_string();
+            let q = v["q"].as_str().unwrap_or("").to_string();
+            let result = v["result"].as_str().unwrap_or("").to_string();
+            let mut html =
+                String::from("<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body>");
+            html.push_str("<style>a.redlink { color:red }</style>");
+            html.push_str(&format!(
+                "<h1>{} (<a href='//www.wikidata.org/wiki/{}'>{}</a>)</h1>",
+                html_escape::encode_text(&label),
+                html_escape::encode_text(&q),
+                html_escape::encode_text(&q)
+            ));
+            if args.links == "wiki" {
+                html.push_str(&format!(
+                    "<pre style='white-space:pre-wrap;font-size:11pt'>{}</pre>",
+                    result
+                ));
+            } else {
+                html.push_str(&format!("<p>{}</p>", result));
+            }
+            html.push_str("<hr/><div style='font-size:8pt;'>This text was generated automatically from Wikidata using <a href='/'>AutoDesc</a>.</div>");
+            html.push_str("</body></html>");
+            Html(html).into_response()
+        }
+        "jsonfm" => {
+            let json_text = serde_json::to_string_pretty(
+                &serde_json::from_str::<Value>(&cached_json).unwrap_or_default(),
+            )
+            .unwrap_or(cached_json);
+            let mut html =
+                String::from("<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body>");
+            html.push_str("<p>You are looking at the HTML representation of the JSON format. HTML is good for debugging, but is unsuitable for application use.</p>");
+            html.push_str("<hr/><pre style='white-space:pre-wrap'>");
+            html.push_str(&html_escape::encode_text(&json_text));
+            html.push_str("</pre></body></html>");
+            Html(html).into_response()
+        }
+        _ => {
+            if let Some(ref callback) = args.callback {
+                if !callback.is_empty() {
+                    let jsonp = format!("{}({})", callback, cached_json);
+                    return (
+                        StatusCode::OK,
+                        [("content-type", "application/javascript; charset=utf-8")],
+                        jsonp,
+                    )
+                        .into_response();
+                }
+            }
+            (
+                StatusCode::OK,
+                [("content-type", "application/json; charset=utf-8")],
+                cached_json,
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn api_handler(
+    State(state): State<AppState>,
+    Query(params): Query<ApiParams>,
+) -> Response {
     let mut args = params.clone();
 
     // Normalize language
@@ -100,8 +219,28 @@ async fn api_handler(Query(params): Query<ApiParams>) -> Response {
     let q = sanitize_q(&q_raw);
     args.q = Some(q.clone());
 
-    // Create a fresh WikiData client per request
-    let mut wd = WikiData::new();
+    // Build output cache key from all params that affect the result.
+    let output_key = format!(
+        "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+        q,
+        args.lang,
+        args.mode,
+        args.links,
+        args.redlinks,
+        args.get_infobox,
+        args.infobox_template,
+        args.media,
+        args.thumb,
+        args.user_zoom,
+    );
+
+    // Return cached output if available.
+    if let Some(cached) = state.output_cache.get(&output_key).await {
+        return cached_response(cached, &args);
+    }
+
+    // Create a WikiData client backed by the shared item cache.
+    let mut wd = WikiData::new().with_item_cache(state.item_cache.clone());
     let sd = ShortDescription::new();
 
     // Build description options
@@ -171,6 +310,10 @@ async fn api_handler(Query(params): Query<ApiParams>) -> Response {
                 Some(serde_json::to_value(&media_result.thumbnails).unwrap_or_default());
         }
     }
+
+    // Serialize the response and store in the output cache for future requests.
+    let cached_json = serde_json::to_string(&response).unwrap_or_default();
+    state.output_cache.insert(output_key, cached_json).await;
 
     // Format the response
     match args.format.as_str() {
@@ -267,8 +410,11 @@ async fn main() {
         )
         .init();
 
+    let state = AppState::new();
+
     let app = Router::new()
         .route("/", get(api_handler))
+        .with_state(state)
         .layer(CorsLayer::permissive());
 
     let address = std::env::var("AUTODESC_ADDRESS")

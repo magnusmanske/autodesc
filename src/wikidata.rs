@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
+use moka::future::Cache;
 use regex::Regex;
 use reqwest::Client;
 use serde_json::Value;
@@ -18,6 +19,8 @@ pub struct WikiData {
     client: Client,
     api_url: String,
     max_get_entities: usize,
+    /// Optional shared global item cache.
+    item_cache: Option<Cache<String, WikiDataItem>>,
 }
 
 impl WikiData {
@@ -35,7 +38,14 @@ impl WikiData {
             client,
             api_url: api_url.to_string(),
             max_get_entities: 50,
+            item_cache: None,
         }
+    }
+
+    /// Attach a shared global item cache. Items will be read from and written to it.
+    pub fn with_item_cache(mut self, cache: Cache<String, WikiDataItem>) -> Self {
+        self.item_cache = Some(cache);
+        self
     }
 
     pub fn has_item(&self, q: &str) -> bool {
@@ -51,7 +61,7 @@ impl WikiData {
     }
 
     /// Fetch a batch of entities from the Wikidata API.
-    /// Entities already in the cache are skipped.
+    /// Entities already in the local map or global item cache are skipped.
     pub async fn get_item_batch(&mut self, item_list: &[String]) -> anyhow::Result<()> {
         let mut to_load: Vec<String> = Vec::new();
         let mut seen = HashSet::new();
@@ -60,6 +70,14 @@ impl WikiData {
             let q = sanitize_q(q);
             if self.items.contains_key(&q) || seen.contains(&q) {
                 continue;
+            }
+            // Check global item cache before scheduling an API fetch.
+            if let Some(cache) = &self.item_cache {
+                if let Some(item) = cache.get(&q).await {
+                    self.items.insert(q.clone(), item);
+                    seen.insert(q);
+                    continue;
+                }
             }
             seen.insert(q.clone());
             to_load.push(q);
@@ -94,7 +112,12 @@ impl WikiData {
             if let Some(entities) = resp.get("entities").and_then(|e| e.as_object()) {
                 for (k, v) in entities {
                     let q = unified_id(k);
-                    self.items.insert(q, WikiDataItem::new(v.clone()));
+                    let item = WikiDataItem::new(v.clone());
+                    // Populate global item cache with freshly loaded items.
+                    if let Some(cache) = &self.item_cache {
+                        cache.insert(q.clone(), item.clone()).await;
+                    }
+                    self.items.insert(q, item);
                 }
             }
         }
