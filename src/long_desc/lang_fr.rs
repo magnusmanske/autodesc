@@ -37,9 +37,7 @@ const CFG: LangConfig = LangConfig {
 fn get_sep_after_fr(len: usize, pos: usize) -> &'static str {
     if pos + 1 == len {
         " "
-    } else if pos == 0 && len == 2 {
-        " et "
-    } else if len == pos + 2 {
+    } else if (pos == 0 && len == 2) || (len == pos + 2) {
         " et "
     } else {
         ", "
@@ -100,7 +98,11 @@ impl LangGenerator for LangFr {
             if k > 0 {
                 state.push_text("-");
             }
-            let nat = if k > 0 { country_label.to_lowercase() } else { country_label };
+            let nat = if k > 0 {
+                country_label.to_lowercase()
+            } else {
+                country_label
+            };
             state.push_text(&nat);
             state.push_text(" ");
         }
@@ -126,8 +128,10 @@ impl LangGenerator for LangFr {
     }
 
     fn add_birth_text(&self, state: &mut LongDescState, claims: &Value) {
-        let birthdate =
-            claims.get("P569").and_then(|v| v.as_array()).and_then(|a| a.first());
+        let birthdate = claims
+            .get("P569")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first());
         let birthplace = get_first_claim_item(claims, "P19");
         let birthname = get_first_claim_string(claims, "P513");
 
@@ -263,7 +267,11 @@ impl LangGenerator for LangFr {
         // Notable works (P800)
         let notable_works = get_claim_item_ids(claims, "P800");
         if !notable_works.is_empty() {
-            let verb = if is_dead { "comprenaient" } else { "comprennent" };
+            let verb = if is_dead {
+                "comprenaient"
+            } else {
+                "comprennent"
+            };
             state.push_text(&format!("Ses œuvres notables {} ", verb));
             for (k, q) in notable_works.iter().enumerate() {
                 state.push_item(q, "", get_sep_after_fr(notable_works.len(), k));
@@ -300,8 +308,11 @@ impl LangGenerator for LangFr {
         // Children (P40)
         let children = get_claim_item_ids(claims, "P40");
         if !children.is_empty() {
-            let parent_of =
-                if state.is_male { "Il est le père de " } else { "Elle est la mère de " };
+            let parent_of = if state.is_male {
+                "Il est le père de "
+            } else {
+                "Elle est la mère de "
+            };
             state.push_text(parent_of);
             for (k, q) in children.iter().enumerate() {
                 state.push_item(q, "", get_sep_after_fr(children.len(), k));
@@ -313,15 +324,21 @@ impl LangGenerator for LangFr {
     }
 
     fn add_death_text(&self, state: &mut LongDescState, claims: &Value) {
-        let deathdate =
-            claims.get("P570").and_then(|v| v.as_array()).and_then(|a| a.first());
+        let deathdate = claims
+            .get("P570")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first());
         let deathplace = get_first_claim_item(claims, "P20");
         let has_deathcause = has_claims(claims, "P509");
         let has_killer = has_claims(claims, "P157");
 
         if deathdate.is_some() || deathplace.is_some() || has_deathcause || has_killer {
             let subj = state.pronoun_subject(&CFG);
-            let died = if state.is_male { "est mort" } else { "est morte" };
+            let died = if state.is_male {
+                "est mort"
+            } else {
+                "est morte"
+            };
             state.push_text(&format!("{} {} ", subj, died));
 
             if has_deathcause {
@@ -351,8 +368,11 @@ impl LangGenerator for LangFr {
         // Burial place (P119)
         if let Some(burial_q) = get_first_claim_item(claims, "P119") {
             let subj = state.pronoun_subject(&CFG);
-            let buried =
-                if state.is_male { "est enterré à " } else { "est enterrée à " };
+            let buried = if state.is_male {
+                "est enterré à "
+            } else {
+                "est enterrée à "
+            };
             state.push_item(&burial_q, &format!("{} {}", subj, buried), ". ");
         }
     }
