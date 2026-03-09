@@ -86,6 +86,32 @@ impl ShortDescription {
             h.push(h2);
         }
 
+        // Apply gendered occupation labels (P2521/P3321) to P106 entries.
+        // Items are already cached in `wd` after `label_items`.
+        let mut item_labels = item_labels;
+        if is_female || is_male {
+            let p106_label_to_qid: std::collections::HashMap<String, String> = load_items
+                .iter()
+                .filter(|(p, _)| *p == 106)
+                .filter_map(|(_, q)| {
+                    let label = wd.get_item(q)?.get_label(Some(lang));
+                    if label == *q { None } else { Some((label, q.clone())) }
+                })
+                .collect();
+            if let Some(occ_labels) = item_labels.get_mut(&106) {
+                for label in occ_labels.iter_mut() {
+                    let (_full, before, inner, after) = split_link(label);
+                    if let Some(q) = p106_label_to_qid.get(&inner) {
+                        if let Some(gendered) =
+                            wd.get_item(q).and_then(|i| i.get_gendered_label(lang, is_female))
+                        {
+                            *label = format!("{}{}{}", before, gendered, after);
+                        }
+                    }
+                }
+            }
+        }
+
         // Occupation
         let ol = h.len();
         let hints = WordHints {

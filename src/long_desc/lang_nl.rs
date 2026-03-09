@@ -91,10 +91,21 @@ impl LangGenerator for LangNl {
             }
         }
 
-        // Occupations
+        // Occupations (use P2521/P3321 gendered label when available)
         let occupations = get_claim_item_ids(claims, "P106");
         for (k, occ_q) in occupations.iter().enumerate() {
-            state.push_item(occ_q, "", get_sep_after_nl(occupations.len(), k));
+            let sep = get_sep_after_nl(occupations.len(), k);
+            if state.is_female || state.is_male {
+                if let Some(gendered) = wd
+                    .get_item(occ_q)
+                    .and_then(|i| i.get_gendered_label(&state.lang, state.is_female))
+                {
+                    state.push_text(&gendered);
+                    state.push_text(sep);
+                    continue;
+                }
+            }
+            state.push_item(occ_q, "", sep);
         }
 
         state.push_text(". ");

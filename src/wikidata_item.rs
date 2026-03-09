@@ -122,6 +122,30 @@ impl WikiDataItem {
         fallback
     }
 
+    /// Get the gendered form of the label for an occupation item.
+    /// Uses P2521 ("female form of label") when `is_female`, P3321 ("male form of label") otherwise.
+    /// Both are monolingualtext properties.
+    pub fn get_gendered_label(&self, lang: &str, is_female: bool) -> Option<String> {
+        let prop = if is_female { "P2521" } else { "P3321" };
+        let claims = self.get_claims_for_property(prop);
+        for claim in &claims {
+            if let Some(value) = claim
+                .get("mainsnak")
+                .and_then(|s| s.get("datavalue"))
+                .and_then(|dv| dv.get("value"))
+            {
+                let claim_lang = value.get("language").and_then(|l| l.as_str());
+                let text = value.get("text").and_then(|t| t.as_str());
+                if let (Some(cl), Some(t)) = (claim_lang, text) {
+                    if cl == lang {
+                        return Some(t.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Get the demonym (P1549) for this item in the given language.
     /// P1549 values are monolingualtext, so we look for the one matching `lang`.
     pub fn get_demonym(&self, lang: &str) -> Option<String> {
@@ -596,6 +620,38 @@ mod tests {
         assert_eq!(ids.len(), 2);
         assert!(ids.contains(&"Q5".to_string()));
         assert!(ids.contains(&"Q6256".to_string()));
+    }
+
+    #[test]
+    fn test_get_gendered_label() {
+        let raw = serde_json::json!({
+            "claims": {
+                "P2521": [
+                    {
+                        "mainsnak": {
+                            "datavalue": {
+                                "type": "monolingualtext",
+                                "value": { "text": "escritora", "language": "es" }
+                            }
+                        }
+                    }
+                ],
+                "P3321": [
+                    {
+                        "mainsnak": {
+                            "datavalue": {
+                                "type": "monolingualtext",
+                                "value": { "text": "escritor", "language": "es" }
+                            }
+                        }
+                    }
+                ]
+            }
+        });
+        let item = WikiDataItem::new(raw);
+        assert_eq!(item.get_gendered_label("es", true), Some("escritora".to_string()));
+        assert_eq!(item.get_gendered_label("es", false), Some("escritor".to_string()));
+        assert_eq!(item.get_gendered_label("fr", true), None);
     }
 
     #[test]
