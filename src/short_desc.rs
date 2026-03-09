@@ -1166,30 +1166,14 @@ impl ShortDescription {
             lang,
         );
 
-        // Inception / Until dates
-        if let Some(item) = wd.get_item(q) {
-            if item.has_claims("P571") {
-                let year = WikiData::get_year(
-                    &item.raw.get("claims").cloned().unwrap_or_default(),
-                    571,
-                    lang,
-                    &self.stock,
-                );
-                if !year.is_empty() {
-                    h.push(format!(", {} {}", self.txt("from", lang), year));
-                }
-            }
-            if item.has_claims("P576") {
-                let year = WikiData::get_year(
-                    &item.raw.get("claims").cloned().unwrap_or_default(),
-                    576,
-                    lang,
-                    &self.stock,
-                );
-                if !year.is_empty() {
-                    h.push(format!(", {} {}", self.txt("until", lang), year));
-                }
-            }
+        // Inception / Until dates — `claims` is already the claims object for `q`
+        let inception_year = WikiData::get_year(claims, 571, lang, &self.stock);
+        if !inception_year.is_empty() {
+            h.push(format!(", {} {}", self.txt("from", lang), inception_year));
+        }
+        let until_year = WikiData::get_year(claims, 576, lang, &self.stock);
+        if !until_year.is_empty() {
+            h.push(format!(", {} {}", self.txt("until", lang), until_year));
         }
 
         // Origin (headquarters, country of origin)
