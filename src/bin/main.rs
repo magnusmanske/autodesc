@@ -35,7 +35,11 @@ input, select { margin: 4px 0; }
 </head>
 <body>
 <h1>AutoDesc - Wikidata automated description API</h1>
-<p>This API can describe most Wikidata items automatically. For some item types (e.g. biographies) in some languages, long descriptions are available.</p>
+<p>This API can describe most Wikidata items automatically. For some item types (e.g. biographies) in some languages, long descriptions are available.
+<a href='http://magnusmanske.de/wordpress/?p=265'>Blog entry,</a>
+<a href='https://github.com/magnusmanske/autodesc'>code repo</a>
+<!--,<a href='https://tooltranslate.toolforge.org//#tool=27'>translations</a>-->
+.</p>
 <form method="get" action="/">
 <div><label>Q</label> <input type="text" name="q" placeholder="Q42" size="10"></div>
 <div><label>Language</label> <input type="text" name="lang" value="en" size="5"></div>
@@ -324,12 +328,16 @@ async fn main() {
         .route("/", get(api_handler))
         .layer(CorsLayer::permissive());
 
+    let address = std::env::var("AUTODESC_ADDRESS")
+        .ok()
+        .unwrap_or("0.0.0.0".to_string());
+
     let port: u16 = std::env::var("AUTODESC_PORT")
         .ok()
         .and_then(|v| v.parse::<u16>().ok())
         .unwrap_or(8000);
 
-    let bind_addr = format!("0.0.0.0:{port}");
+    let bind_addr = format!("{address}:{port}");
     tracing::info!("AutoDesc server starting on http://{}", bind_addr);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr)
