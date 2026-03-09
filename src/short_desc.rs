@@ -14,6 +14,23 @@ use regex::Regex;
 use crate::desc_options::DescOptions;
 use crate::wikidata::{sanitize_q, WikiData, WikiDataItem, MAIN_LANGUAGES};
 
+/// Maps a taxon-rank Q-id string to its index in the taxa_cache array.
+/// Returns `None` for unrecognised ranks.
+fn taxon_rank_index(q: &str) -> Option<usize> {
+    match q {
+        "Q767728" => Some(0), // variety
+        "Q68947" => Some(1),  // subspecies
+        "Q7432" => Some(2),   // species
+        "Q34740" => Some(3),  // genus
+        "Q35409" => Some(4),  // family
+        "Q36602" => Some(5),  // order
+        "Q37517" => Some(6),  // class
+        "Q38348" => Some(7),  // phylum
+        "Q36732" => Some(8),  // kingdom
+        _ => None,
+    }
+}
+
 fn entity_url_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"^.+?entity/").expect("regex is valid"))
@@ -765,20 +782,6 @@ impl ShortDescription {
             Err(_) => return self.describe_generic(q, claims, opt, wd).await,
         };
 
-        let taxa_ranks: HashMap<&str, u64> = [
-            ("Q767728", 0), // variety
-            ("Q68947", 1),  // subspecies
-            ("Q7432", 2),   // species
-            ("Q34740", 3),  // genus
-            ("Q35409", 4),  // family
-            ("Q36602", 5),  // order
-            ("Q37517", 6),  // class
-            ("Q38348", 7),  // phylum
-            ("Q36732", 8),  // kingdom
-        ]
-        .into_iter()
-        .collect();
-
         let bindings = body
             .get("results")
             .and_then(|r| r.get("bindings"))
@@ -825,9 +828,9 @@ impl ShortDescription {
                 }
             }
 
-            if let Some(&rank_id) = taxa_ranks.get(taxon_rank.as_str()) {
-                if (rank_id as usize) < taxa_cache.len() {
-                    taxa_cache[rank_id as usize] = Some(binding.clone());
+            if let Some(rank_id) = taxon_rank_index(&taxon_rank) {
+                if rank_id < taxa_cache.len() {
+                    taxa_cache[rank_id] = Some(binding.clone());
                 }
             }
         }
