@@ -48,6 +48,7 @@ impl ShortDescription {
         Self::add_items_from_claims(claims, 25, &mut load_items); // Mother
         Self::add_items_from_claims(claims, 26, &mut load_items); // Spouse
         Self::add_items_from_claims(claims, 463, &mut load_items); // Member of
+        Self::add_items_from_claims(claims, 800, &mut load_items); // Notable work
 
         let is_male = Self::has_pq(claims, 21, 6581097);
         let is_female = Self::has_pq(claims, 21, 6581072);
@@ -182,6 +183,19 @@ impl ShortDescription {
                 hints: &empty_hints,
                 prefix: Some(";"),
                 txt_key: Some("spouse of"),
+            },
+            lang,
+        );
+
+        // Notable work
+        self.add2desc(
+            &mut h,
+            &item_labels,
+            Add2DescArgs {
+                props: &[800],
+                hints: &empty_hints,
+                prefix: Some(";"),
+                txt_key: Some("notable work"),
             },
             lang,
         );

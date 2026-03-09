@@ -257,6 +257,17 @@ impl LangGenerator for LangEn {
             state.push_text(". ");
         }
 
+        // Notable works (P800)
+        let notable_works = get_claim_item_ids(claims, "P800");
+        if !notable_works.is_empty() {
+            let verb = if is_dead { "included" } else { "include" };
+            state.push_text(&format!("{} notable works {} ", poss, verb));
+            for (k, q) in notable_works.iter().enumerate() {
+                state.push_item(q, "", get_sep_after_en(notable_works.len(), k));
+            }
+            state.push_text(". ");
+        }
+
         state.push_newline();
     }
 

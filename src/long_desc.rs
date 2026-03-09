@@ -232,6 +232,7 @@ impl LongDescGenerator {
         add_claim_items(claims, "P509", &mut items_to_load); // Cause of death
         add_claim_items(claims, "P157", &mut items_to_load); // Killed by
         add_claim_items(claims, "P119", &mut items_to_load); // Place of burial
+        add_claim_items(claims, "P800", &mut items_to_load); // Notable work
 
         // Also load qualifier items (P642 = "of" qualifier on positions, P794 = "as" on employers)
         add_qualifier_items(claims, "P39", "P642", &mut items_to_load);
