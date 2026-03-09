@@ -226,7 +226,7 @@ impl MediaGenerator {
 mod tests {
     use super::*;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_generate_media_nonexistent() {
         let mut wd = WikiData::new();
         let result = MediaGenerator::generate_media("Q0", "", 4, &mut wd).await;
@@ -234,7 +234,7 @@ mod tests {
         assert!(result.thumbnails.is_empty());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_generate_media_with_image() {
         let mut wd = WikiData::new();
         // Q350 is Cambridge - has image, coat of arms, banner, and coordinates
@@ -246,7 +246,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_generate_media_no_thumb() {
         let mut wd = WikiData::new();
         // Q350 is Cambridge

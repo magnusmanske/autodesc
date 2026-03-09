@@ -38,22 +38,27 @@ impl ShortDescription {
         opt: &DescOptions,
         wd: &mut WikiData,
     ) -> (String, String) {
-        let mut load_items: Vec<(u64, String)> = Vec::new();
-        Self::add_items_from_claims(claims, 106, &mut load_items); // Occupation
-        Self::add_items_from_claims(claims, 39, &mut load_items); // Office
-        Self::add_items_from_claims(claims, 27, &mut load_items); // Country of citizenship
-        Self::add_items_from_claims(claims, 166, &mut load_items); // Award received
-        Self::add_items_from_claims(claims, 31, &mut load_items); // Instance of
-        Self::add_items_from_claims(claims, 22, &mut load_items); // Father
-        Self::add_items_from_claims(claims, 25, &mut load_items); // Mother
-        Self::add_items_from_claims(claims, 26, &mut load_items); // Spouse
-        Self::add_items_from_claims(claims, 463, &mut load_items); // Member of
-        Self::add_items_from_claims(claims, 800, &mut load_items); // Notable work
+        let load_items = Self::describe_person_pre(claims);
 
+        let item_labels = self.label_items(&load_items, opt, wd).await;
+
+        tokio::task::block_in_place(|| {
+            self.describe_person_post(q, claims, opt, wd, load_items, item_labels)
+        })
+    }
+
+    fn describe_person_post(
+        &self,
+        q: &str,
+        claims: &serde_json::Value,
+        opt: &DescOptions,
+        wd: &mut WikiData,
+        load_items: Vec<(u64, String)>,
+        item_labels: std::collections::HashMap<u64, Vec<String>>,
+    ) -> (String, String) {
         let is_male = Self::has_pq(claims, 21, 6581097);
         let is_female = Self::has_pq(claims, 21, 6581072);
 
-        let item_labels = self.label_items(&load_items, opt, wd).await;
         let lang = &opt.lang;
         let mut h: Vec<String> = Vec::new();
 
@@ -64,7 +69,11 @@ impl ShortDescription {
             .filter(|(p, _)| *p == 27)
             .filter_map(|(_, q)| {
                 let label = wd.get_item(q)?.get_label(Some(lang));
-                if label == *q { None } else { Some((label, q.clone())) }
+                if label == *q {
+                    None
+                } else {
+                    Some((label, q.clone()))
+                }
             })
             .collect();
 
@@ -95,15 +104,20 @@ impl ShortDescription {
                 .filter(|(p, _)| *p == 106)
                 .filter_map(|(_, q)| {
                     let label = wd.get_item(q)?.get_label(Some(lang));
-                    if label == *q { None } else { Some((label, q.clone())) }
+                    if label == *q {
+                        None
+                    } else {
+                        Some((label, q.clone()))
+                    }
                 })
                 .collect();
             if let Some(occ_labels) = item_labels.get_mut(&106) {
                 for label in occ_labels.iter_mut() {
                     let (_full, before, inner, after) = split_link(label);
                     if let Some(q) = p106_label_to_qid.get(&inner) {
-                        if let Some(gendered) =
-                            wd.get_item(q).and_then(|i| i.get_gendered_label(lang, is_female))
+                        if let Some(gendered) = wd
+                            .get_item(q)
+                            .and_then(|i| i.get_gendered_label(lang, is_female))
                         {
                             *label = format!("{}{}{}", before, gendered, after);
                         }
@@ -683,5 +697,30 @@ impl ShortDescription {
 
         let result = uc_first(&h.join(" "));
         (q.to_string(), clean_spaces(&result))
+    }
+
+    fn describe_person_pre(claims: &serde_json::Value) -> Vec<(u64, String)> {
+        let mut load_items: Vec<(u64, String)> = Vec::new();
+        Self::add_items_from_claims(claims, 106, &mut load_items);
+        // Occupation
+        Self::add_items_from_claims(claims, 39, &mut load_items);
+        // Office
+        Self::add_items_from_claims(claims, 27, &mut load_items);
+        // Country of citizenship
+        Self::add_items_from_claims(claims, 166, &mut load_items);
+        // Award received
+        Self::add_items_from_claims(claims, 31, &mut load_items);
+        // Instance of
+        Self::add_items_from_claims(claims, 22, &mut load_items);
+        // Father
+        Self::add_items_from_claims(claims, 25, &mut load_items);
+        // Mother
+        Self::add_items_from_claims(claims, 26, &mut load_items);
+        // Spouse
+        Self::add_items_from_claims(claims, 463, &mut load_items);
+        // Member of
+        Self::add_items_from_claims(claims, 800, &mut load_items);
+        // Notable work
+        load_items
     }
 }

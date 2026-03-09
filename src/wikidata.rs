@@ -340,7 +340,7 @@ mod tests {
         })
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_load_entity() {
         let mock_server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -371,7 +371,7 @@ mod tests {
         assert!(wl.contains_key("dewiki"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_batch_loading() {
         let mock_server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -390,7 +390,7 @@ mod tests {
         assert!(wd.has_item("Q1"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_clear() {
         let mock_server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -413,7 +413,7 @@ mod tests {
         assert!(!wd.has_item("Q42"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_batch_dedup() {
         let mock_server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -438,7 +438,7 @@ mod tests {
         assert!(wd.has_item("Q1"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_already_loaded_skipped() {
         let mock_server = MockServer::start().await;
         Mock::given(method("POST"))

@@ -3,7 +3,7 @@ use autodesc::short_desc::{ShortDescription, WordHints};
 use autodesc::wikidata::WikiData;
 
 /// Test that the ShortDescription can generate a description for a known person (Q42 = Douglas Adams).
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_api_person_q42_text() {
     let sd = ShortDescription::new();
     let mut wd = WikiData::new();
@@ -42,7 +42,7 @@ async fn test_api_person_q42_text() {
 }
 
 /// Test that wikidata link mode produces HTML anchor tags.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_api_person_q42_wikidata_links() {
     let sd = ShortDescription::new();
     let mut wd = WikiData::new();
@@ -66,7 +66,7 @@ async fn test_api_person_q42_wikidata_links() {
 }
 
 /// Test that wiki link mode produces wikitext-style links.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_api_item_wiki_links() {
     let sd = ShortDescription::new();
     let mut wd = WikiData::new();
@@ -86,7 +86,7 @@ async fn test_api_item_wiki_links() {
 }
 
 /// Test that a generic item (not person, not taxon) gets described.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_api_generic_item() {
     let sd = ShortDescription::new();
     let mut wd = WikiData::new();
@@ -111,7 +111,7 @@ async fn test_api_generic_item() {
 }
 
 /// Test a German-language description.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_api_person_german() {
     let sd = ShortDescription::new();
     let mut wd = WikiData::new();
@@ -140,7 +140,7 @@ async fn test_api_person_german() {
 }
 
 /// Test that numeric Q-ids are normalized.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_api_numeric_q() {
     let sd = ShortDescription::new();
     let mut wd = WikiData::new();
@@ -157,7 +157,7 @@ async fn test_api_numeric_q() {
 }
 
 /// Test that the label and manual description can be retrieved after loading.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_api_label_and_description() {
     let sd = ShortDescription::new();
     let mut wd = WikiData::new();
@@ -178,7 +178,7 @@ async fn test_api_label_and_description() {
 }
 
 /// Test disambiguation page detection.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_api_disambig() {
     let sd = ShortDescription::new();
     let mut wd = WikiData::new();
@@ -318,7 +318,7 @@ fn test_modify_word_gender() {
 }
 
 /// Test wikipedia link mode for a well-known item.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_api_wikipedia_links() {
     let sd = ShortDescription::new();
     let mut wd = WikiData::new();
@@ -338,7 +338,7 @@ async fn test_api_wikipedia_links() {
 }
 
 /// Test media generation for a location with images and coordinates.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_media_generation_location() {
     use autodesc::media::MediaGenerator;
 
@@ -362,7 +362,7 @@ async fn test_media_generation_location() {
 }
 
 /// Test WikiData item methods.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_wikidata_item_methods() {
     let mut wd = WikiData::new();
     wd.load_entity("Q12345").await.unwrap();
@@ -404,7 +404,7 @@ async fn test_wikidata_item_methods() {
 }
 
 /// Test that batch loading works correctly and deduplicates.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_batch_loading_dedup() {
     let mut wd = WikiData::new();
 

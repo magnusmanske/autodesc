@@ -314,7 +314,7 @@ mod tests {
         assert_eq!(sd.modify_word("actor", &male, "en"), "actor");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_describe_generic_item() {
         let sd = ShortDescription::new();
         let mut wd = WikiData::new();
@@ -328,7 +328,7 @@ mod tests {
         assert!(!desc.is_empty());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_describe_person() {
         let sd = ShortDescription::new();
         let mut wd = WikiData::new();
@@ -347,7 +347,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_describe_with_wikidata_links() {
         let sd = ShortDescription::new();
         let mut wd = WikiData::new();
@@ -364,7 +364,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_describe_wiki_links() {
         let sd = ShortDescription::new();
         let mut wd = WikiData::new();
