@@ -72,7 +72,7 @@ impl ShortDescription {
         // Try long description if mode=long
         if opt.mode == "long" {
             if let Some(long_result) =
-                long_desc::generate_long_description(self, &q, &claims, opt, wd).await
+                long_desc::LongDescGenerator::generate(self, &q, &claims, opt, wd).await
             {
                 return (q, long_result);
             }

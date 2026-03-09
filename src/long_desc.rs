@@ -18,54 +18,54 @@ const LONG_DESC_LANGUAGES: &[&str] = &["en", "nl", "fr"];
 /// A fragment in the long description output.
 /// Either a literal string or a reference to a Wikidata item that will be resolved to a label/link.
 #[derive(Debug, Clone)]
-enum Fragment {
+pub(super) enum Fragment {
     Text(String),
     Item { q: String, before: String, after: String },
 }
 
 /// Date extracted from a Wikidata time claim or qualifier.
 #[derive(Debug, Clone)]
-struct WdDate {
-    time: String,
-    precision: u64,
+pub(super) struct WdDate {
+    pub(super) time: String,
+    pub(super) precision: u64,
 }
 
 /// An item with optional date qualifiers (start/end).
 #[derive(Debug, Clone)]
-struct DatedItem {
-    q: String,
-    date_from: Option<WdDate>,
-    date_to: Option<WdDate>,
-    qualifier_items: HashMap<String, Vec<String>>,
+pub(super) struct DatedItem {
+    pub(super) q: String,
+    pub(super) date_from: Option<WdDate>,
+    pub(super) date_to: Option<WdDate>,
+    pub(super) qualifier_items: HashMap<String, Vec<String>>,
 }
 
 /// Language-specific text configuration for person descriptions.
-struct LangConfig {
-    month_labels: [&'static str; 13],
-    pronoun_subject_male: &'static str,
-    pronoun_possessive_male: &'static str,
-    pronoun_subject_female: &'static str,
-    pronoun_possessive_female: &'static str,
-    pronoun_subject_neutral: &'static str,
-    pronoun_possessive_neutral: &'static str,
-    be_present_singular: &'static str,
-    be_past_singular: &'static str,
-    be_present_neutral: &'static str,
-    be_past_neutral: &'static str,
+pub(super) struct LangConfig {
+    pub(super) month_labels: [&'static str; 13],
+    pub(super) pronoun_subject_male: &'static str,
+    pub(super) pronoun_possessive_male: &'static str,
+    pub(super) pronoun_subject_female: &'static str,
+    pub(super) pronoun_possessive_female: &'static str,
+    pub(super) pronoun_subject_neutral: &'static str,
+    pub(super) pronoun_possessive_neutral: &'static str,
+    pub(super) be_present_singular: &'static str,
+    pub(super) be_past_singular: &'static str,
+    pub(super) be_present_neutral: &'static str,
+    pub(super) be_past_neutral: &'static str,
 }
 
 /// Runtime state for generating a long description.
-struct LongDescState {
-    lang: String,
-    is_male: bool,
-    is_female: bool,
-    is_dead: bool,
-    fragments: Vec<Fragment>,
-    newline: String,
+pub(super) struct LongDescState {
+    pub(super) lang: String,
+    pub(super) is_male: bool,
+    pub(super) is_female: bool,
+    pub(super) is_dead: bool,
+    pub(super) fragments: Vec<Fragment>,
+    pub(super) newline: String,
 }
 
 impl LongDescState {
-    fn pronoun_subject(&self, cfg: &LangConfig) -> &'static str {
+    pub(super) fn pronoun_subject(&self, cfg: &LangConfig) -> &'static str {
         if self.is_male {
             cfg.pronoun_subject_male
         } else if self.is_female {
@@ -75,7 +75,7 @@ impl LongDescState {
         }
     }
 
-    fn pronoun_possessive(&self, cfg: &LangConfig) -> &'static str {
+    pub(super) fn pronoun_possessive(&self, cfg: &LangConfig) -> &'static str {
         if self.is_male {
             cfg.pronoun_possessive_male
         } else if self.is_female {
@@ -85,7 +85,7 @@ impl LongDescState {
         }
     }
 
-    fn be_present(&self, cfg: &LangConfig) -> &'static str {
+    pub(super) fn be_present(&self, cfg: &LangConfig) -> &'static str {
         if !self.is_male && !self.is_female {
             cfg.be_present_neutral
         } else {
@@ -93,7 +93,7 @@ impl LongDescState {
         }
     }
 
-    fn be_past(&self, cfg: &LangConfig) -> &'static str {
+    pub(super) fn be_past(&self, cfg: &LangConfig) -> &'static str {
         if !self.is_male && !self.is_female {
             cfg.be_past_neutral
         } else {
@@ -101,11 +101,11 @@ impl LongDescState {
         }
     }
 
-    fn push_text(&mut self, s: &str) {
+    pub(super) fn push_text(&mut self, s: &str) {
         self.fragments.push(Fragment::Text(s.to_string()));
     }
 
-    fn push_item(&mut self, q: &str, before: &str, after: &str) {
+    pub(super) fn push_item(&mut self, q: &str, before: &str, after: &str) {
         self.fragments.push(Fragment::Item {
             q: q.to_string(),
             before: before.to_string(),
@@ -113,7 +113,7 @@ impl LongDescState {
         });
     }
 
-    fn push_newline(&mut self) {
+    pub(super) fn push_newline(&mut self) {
         self.fragments.push(Fragment::Text(self.newline.clone()));
     }
 }
@@ -133,88 +133,128 @@ pub fn is_long_desc_available(lang: &str) -> bool {
     LONG_DESC_LANGUAGES.contains(&lang)
 }
 
-/// Generate a long description for a person.
-/// Returns `None` if the language is not supported or the item is not a person.
-pub async fn generate_long_description(
-    sd: &ShortDescription,
-    q: &str,
-    claims: &Value,
-    opt: &DescOptions,
-    wd: &mut WikiData,
-) -> Option<String> {
-    if !is_long_desc_available(&opt.lang) {
-        return None;
+/// Trait implemented by each supported language's generator.
+/// Provides language-specific text for each section of the long description.
+/// The default `generate` method calls the five sections in order.
+pub(super) trait LangGenerator {
+    fn add_first_sentence(
+        &self,
+        state: &mut LongDescState,
+        q: &str,
+        claims: &Value,
+        sd: &ShortDescription,
+        wd: &WikiData,
+    );
+    fn add_birth_text(&self, state: &mut LongDescState, claims: &Value);
+    fn add_work_text(&self, state: &mut LongDescState, claims: &Value);
+    fn add_family_text(&self, state: &mut LongDescState, claims: &Value);
+    fn add_death_text(&self, state: &mut LongDescState, claims: &Value);
+
+    /// Generate the full description by calling the five sections in order.
+    fn generate(
+        &self,
+        state: &mut LongDescState,
+        q: &str,
+        claims: &Value,
+        sd: &ShortDescription,
+        wd: &WikiData,
+    ) {
+        self.add_first_sentence(state, q, claims, sd, wd);
+        self.add_birth_text(state, claims);
+        self.add_work_text(state, claims);
+        self.add_family_text(state, claims);
+        self.add_death_text(state, claims);
     }
+}
 
-    // Only persons get long descriptions
-    if !ShortDescription::is_person_public(claims) {
-        return None;
+/// Orchestrates long description generation for any supported language.
+pub struct LongDescGenerator;
+
+impl LongDescGenerator {
+    /// Generate a long description for a person.
+    /// Returns `None` if the language is not supported or the item is not a person.
+    pub async fn generate(
+        sd: &ShortDescription,
+        q: &str,
+        claims: &Value,
+        opt: &DescOptions,
+        wd: &mut WikiData,
+    ) -> Option<String> {
+        if !is_long_desc_available(&opt.lang) {
+            return None;
+        }
+
+        // Only persons get long descriptions
+        if !ShortDescription::is_person_public(claims) {
+            return None;
+        }
+
+        let is_male = ShortDescription::has_pq_public(claims, 21, 6581097)
+            || ShortDescription::has_pq_public(claims, 21, 2449503);
+        let is_female = ShortDescription::has_pq_public(claims, 21, 6581072)
+            || ShortDescription::has_pq_public(claims, 21, 1052281);
+        let is_dead = has_claims(claims, "P570");
+
+        let newline = match opt.links.as_str() {
+            "text" => "\n".to_string(),
+            "wiki" => "\n\n".to_string(),
+            _ => "<br/>".to_string(),
+        };
+
+        let mut state = LongDescState {
+            lang: opt.lang.clone(),
+            is_male,
+            is_female,
+            is_dead,
+            fragments: Vec::new(),
+            newline,
+        };
+
+        // Collect all Q-ids we need to load
+        let mut items_to_load: Vec<String> = Vec::new();
+
+        // Items needed for description sections
+        add_claim_items(claims, "P27", &mut items_to_load); // Country of citizenship
+        add_claim_items(claims, "P106", &mut items_to_load); // Occupation
+        add_claim_items(claims, "P793", &mut items_to_load); // Significant event
+        add_claim_items(claims, "P19", &mut items_to_load); // Birth place
+        add_claim_items(claims, "P22", &mut items_to_load); // Father
+        add_claim_items(claims, "P25", &mut items_to_load); // Mother
+        add_claim_items(claims, "P69", &mut items_to_load); // Educated at
+        add_claim_items(claims, "P136", &mut items_to_load); // Genre
+        add_claim_items(claims, "P101", &mut items_to_load); // Field of work
+        add_claim_items(claims, "P39", &mut items_to_load); // Position held
+        add_claim_items(claims, "P463", &mut items_to_load); // Member of
+        add_claim_items(claims, "P108", &mut items_to_load); // Employer
+        add_claim_items(claims, "P26", &mut items_to_load); // Spouse
+        add_claim_items(claims, "P40", &mut items_to_load); // Child
+        add_claim_items(claims, "P20", &mut items_to_load); // Death place
+        add_claim_items(claims, "P509", &mut items_to_load); // Cause of death
+        add_claim_items(claims, "P157", &mut items_to_load); // Killed by
+        add_claim_items(claims, "P119", &mut items_to_load); // Place of burial
+
+        // Also load qualifier items (P642 = "of" qualifier on positions, P794 = "as" on employers)
+        add_qualifier_items(claims, "P39", "P642", &mut items_to_load);
+        add_qualifier_items(claims, "P108", "P794", &mut items_to_load);
+
+        // Batch-load all items
+        if let Err(e) = wd.get_item_batch(&items_to_load).await {
+            tracing::warn!("Long desc: failed to load items: {}", e);
+        }
+
+        // Dispatch to the language-specific generator
+        let lang_gen: &dyn LangGenerator = match opt.lang.as_str() {
+            "en" => &lang_en::LangEn,
+            "nl" => &lang_nl::LangNl,
+            "fr" => &lang_fr::LangFr,
+            _ => return None,
+        };
+        lang_gen.generate(&mut state, q, claims, sd, wd);
+
+        // Resolve fragments to output string
+        let result = resolve_fragments(&state, opt, wd);
+        Some(clean_output(&result))
     }
-
-    let is_male = ShortDescription::has_pq_public(claims, 21, 6581097)
-        || ShortDescription::has_pq_public(claims, 21, 2449503);
-    let is_female = ShortDescription::has_pq_public(claims, 21, 6581072)
-        || ShortDescription::has_pq_public(claims, 21, 1052281);
-    let is_dead = has_claims(claims, "P570");
-
-    let newline = match opt.links.as_str() {
-        "text" => "\n".to_string(),
-        "wiki" => "\n\n".to_string(),
-        _ => "<br/>".to_string(),
-    };
-
-    let mut state = LongDescState {
-        lang: opt.lang.clone(),
-        is_male,
-        is_female,
-        is_dead,
-        fragments: Vec::new(),
-        newline,
-    };
-
-    // Collect all Q-ids we need to load
-    let mut items_to_load: Vec<String> = Vec::new();
-
-    // Items needed for description sections
-    add_claim_items(claims, "P27", &mut items_to_load); // Country of citizenship
-    add_claim_items(claims, "P106", &mut items_to_load); // Occupation
-    add_claim_items(claims, "P793", &mut items_to_load); // Significant event
-    add_claim_items(claims, "P19", &mut items_to_load); // Birth place
-    add_claim_items(claims, "P22", &mut items_to_load); // Father
-    add_claim_items(claims, "P25", &mut items_to_load); // Mother
-    add_claim_items(claims, "P69", &mut items_to_load); // Educated at
-    add_claim_items(claims, "P136", &mut items_to_load); // Genre
-    add_claim_items(claims, "P101", &mut items_to_load); // Field of work
-    add_claim_items(claims, "P39", &mut items_to_load); // Position held
-    add_claim_items(claims, "P463", &mut items_to_load); // Member of
-    add_claim_items(claims, "P108", &mut items_to_load); // Employer
-    add_claim_items(claims, "P26", &mut items_to_load); // Spouse
-    add_claim_items(claims, "P40", &mut items_to_load); // Child
-    add_claim_items(claims, "P20", &mut items_to_load); // Death place
-    add_claim_items(claims, "P509", &mut items_to_load); // Cause of death
-    add_claim_items(claims, "P157", &mut items_to_load); // Killed by
-    add_claim_items(claims, "P119", &mut items_to_load); // Place of burial
-
-    // Also load qualifier items (P642 = "of" qualifier on positions, P794 = "as" on employers)
-    add_qualifier_items(claims, "P39", "P642", &mut items_to_load);
-    add_qualifier_items(claims, "P108", "P794", &mut items_to_load);
-
-    // Batch-load all items
-    if let Err(e) = wd.get_item_batch(&items_to_load).await {
-        tracing::warn!("Long desc: failed to load items: {}", e);
-    }
-
-    // Build the description using the language-specific generator
-    match opt.lang.as_str() {
-        "en" => lang_en::generate(&mut state, q, claims, sd, wd),
-        "nl" => lang_nl::generate(&mut state, q, claims, sd, wd),
-        "fr" => lang_fr::generate(&mut state, q, claims, sd, wd),
-        _ => return None,
-    }
-
-    // Resolve fragments to output string
-    let result = resolve_fragments(&state, opt, wd);
-    Some(clean_output(&result))
 }
 
 /// Resolve all fragments into the final output string.
@@ -336,7 +376,7 @@ fn clean_output(s: &str) -> String {
 // ─── Wikidata claim helpers ───────────────────────────────────────────────────
 
 /// Check if claims contain any values for a property.
-fn has_claims(claims: &Value, prop: &str) -> bool {
+pub(super) fn has_claims(claims: &Value, prop: &str) -> bool {
     claims
         .get(prop)
         .and_then(|v| v.as_array())
@@ -345,7 +385,7 @@ fn has_claims(claims: &Value, prop: &str) -> bool {
 }
 
 /// Add all item Q-ids from claims for a property to the list.
-fn add_claim_items(claims: &Value, prop: &str, items: &mut Vec<String>) {
+pub(super) fn add_claim_items(claims: &Value, prop: &str, items: &mut Vec<String>) {
     let arr = match claims.get(prop).and_then(|v| v.as_array()) {
         Some(a) => a,
         None => return,
@@ -397,14 +437,14 @@ fn add_qualifier_items(claims: &Value, prop: &str, qual_prop: &str, items: &mut 
 }
 
 /// Get the first claim target item Q-id for a property.
-fn get_first_claim_item(claims: &Value, prop: &str) -> Option<String> {
+pub(super) fn get_first_claim_item(claims: &Value, prop: &str) -> Option<String> {
     let arr = claims.get(prop)?.as_array()?;
     arr.first()
         .and_then(WikiDataItem::get_claim_target_item_id)
 }
 
 /// Get all claim target item Q-ids for a property.
-fn get_claim_item_ids(claims: &Value, prop: &str) -> Vec<String> {
+pub(super) fn get_claim_item_ids(claims: &Value, prop: &str) -> Vec<String> {
     claims
         .get(prop)
         .and_then(|v| v.as_array())
@@ -417,7 +457,11 @@ fn get_claim_item_ids(claims: &Value, prop: &str) -> Vec<String> {
 }
 
 /// Extract items with date qualifiers from claims.
-fn get_dated_items(claims: &Value, prop: &str, qualifier_keys: &[&str]) -> Vec<DatedItem> {
+pub(super) fn get_dated_items(
+    claims: &Value,
+    prop: &str,
+    qualifier_keys: &[&str],
+) -> Vec<DatedItem> {
     let arr = match claims.get(prop).and_then(|v| v.as_array()) {
         Some(a) => a,
         None => return Vec::new(),
@@ -432,19 +476,17 @@ fn get_dated_items(claims: &Value, prop: &str, qualifier_keys: &[&str]) -> Vec<D
 
         let qualifiers = claim.get("qualifiers");
 
-        let date_from = qualifiers
-            .and_then(|qs| {
-                // Try P581 (point in time) first, then P580 (start time)
-                extract_date_qualifier(qs, "P581")
-                    .or_else(|| extract_date_qualifier(qs, "P580"))
-            });
+        let date_from = qualifiers.and_then(|qs| {
+            // Try P581 (point in time) first, then P580 (start time)
+            extract_date_qualifier(qs, "P581")
+                .or_else(|| extract_date_qualifier(qs, "P580"))
+        });
 
-        let date_to = qualifiers
-            .and_then(|qs| {
-                // Try P581 first, then P582 (end time)
-                extract_date_qualifier(qs, "P581")
-                    .or_else(|| extract_date_qualifier(qs, "P582"))
-            });
+        let date_to = qualifiers.and_then(|qs| {
+            // Try P581 first, then P582 (end time)
+            extract_date_qualifier(qs, "P581")
+                .or_else(|| extract_date_qualifier(qs, "P582"))
+        });
 
         let mut qualifier_items: HashMap<String, Vec<String>> = HashMap::new();
         if let Some(qs) = qualifiers {
@@ -470,12 +512,7 @@ fn get_dated_items(claims: &Value, prop: &str, qualifier_keys: &[&str]) -> Vec<D
             }
         }
 
-        result.push(DatedItem {
-            q,
-            date_from,
-            date_to,
-            qualifier_items,
-        });
+        result.push(DatedItem { q, date_from, date_to, qualifier_items });
     }
 
     // Sort by date
@@ -499,7 +536,7 @@ fn get_dated_items(claims: &Value, prop: &str, qualifier_keys: &[&str]) -> Vec<D
 }
 
 /// Extract a date from a qualifier.
-fn extract_date_qualifier(qualifiers: &Value, prop: &str) -> Option<WdDate> {
+pub(super) fn extract_date_qualifier(qualifiers: &Value, prop: &str) -> Option<WdDate> {
     let arr = qualifiers.get(prop)?.as_array()?;
     let first = arr.first()?;
     let dv = first.get("datavalue")?.get("value")?;
@@ -509,90 +546,34 @@ fn extract_date_qualifier(qualifiers: &Value, prop: &str) -> Option<WdDate> {
 }
 
 /// Extract a WdDate from a claim's mainsnak time value.
-fn extract_claim_date(claim: &Value) -> Option<WdDate> {
-    let value = claim
-        .get("mainsnak")?
-        .get("datavalue")?
-        .get("value")?;
+pub(super) fn extract_claim_date(claim: &Value) -> Option<WdDate> {
+    let value = claim.get("mainsnak")?.get("datavalue")?.get("value")?;
     let time = value.get("time")?.as_str()?.to_string();
     let precision = value.get("precision")?.as_u64().unwrap_or(9);
     Some(WdDate { time, precision })
 }
 
 /// Get the claim target string value (e.g. for birth name P513).
-fn get_first_claim_string(claims: &Value, prop: &str) -> Option<String> {
+pub(super) fn get_first_claim_string(claims: &Value, prop: &str) -> Option<String> {
     let arr = claims.get(prop)?.as_array()?;
     WikiDataItem::get_claim_target_string(arr.first()?)
 }
 
 /// Get the main label for the item.
-fn get_main_title_label(q: &str, wd: &WikiData, lang: &str) -> String {
+pub(super) fn get_main_title_label(q: &str, wd: &WikiData, lang: &str) -> String {
     wd.get_item(q)
         .map(|item| item.get_label(Some(lang)))
         .unwrap_or_else(|| q.to_string())
 }
 
-/// Format the main title with bold markup.
-fn push_bold_title(state: &mut LongDescState, label: &str, opt: &DescOptions) {
-    match opt.links.as_str() {
-        "text" => {
-            state.push_text(label);
-            state.push_text(" ");
-        }
-        "wiki" => {
-            state.push_text("'''");
-            state.push_text(label);
-            state.push_text("''' ");
-        }
-        _ => {
-            state.push_text("<b>");
-            state.push_text(label);
-            state.push_text("</b> ");
-        }
-    }
-}
-
-/// Get a separator for list items (English-style: "a, b, and c").
-fn get_sep_after_en(len: usize, pos: usize) -> &'static str {
-    if pos + 1 == len {
-        " "
-    } else if pos == 0 && len == 2 {
-        " and "
-    } else if len == pos + 2 {
-        ", and "
-    } else {
-        ", "
-    }
-}
-
-/// Get a separator for list items (Dutch-style: "a, b, en c").
-fn get_sep_after_nl(len: usize, pos: usize) -> &'static str {
-    if pos + 1 == len {
-        " "
-    } else if pos == 0 && len == 2 {
-        " en "
-    } else if len == pos + 2 {
-        ", en "
-    } else {
-        ", "
-    }
-}
-
-/// Get a separator for list items (French-style: "a, b et c").
-fn get_sep_after_fr(len: usize, pos: usize) -> &'static str {
-    if pos + 1 == len {
-        " "
-    } else if pos == 0 && len == 2 {
-        " et "
-    } else if len == pos + 2 {
-        " et "
-    } else {
-        ", "
-    }
-}
-
 /// Render a simple list of items: prefix + item1, item2, ... + suffix.
-fn push_simple_list(state: &mut LongDescState, items: &[String], start: &str, end: &str, sep_fn: fn(usize, usize) -> &'static str) {
+pub(super) fn push_simple_list(
+    state: &mut LongDescState,
+    items: &[String],
+    start: &str,
+    end: &str,
+    sep_fn: fn(usize, usize) -> &'static str,
+) {
     if items.is_empty() {
         return;
     }
@@ -605,7 +586,7 @@ fn push_simple_list(state: &mut LongDescState, items: &[String], start: &str, en
 }
 
 /// Parse a Wikidata time string into components.
-fn parse_time(time: &str) -> Option<(i32, &str, u32, u32)> {
+pub(super) fn parse_time(time: &str) -> Option<(i32, &str, u32, u32)> {
     let re = time_regex();
     let caps = re.captures(time)?;
     let sign = if caps.get(1)?.as_str() == "+" { 1 } else { -1 };
@@ -613,6 +594,5 @@ fn parse_time(time: &str) -> Option<(i32, &str, u32, u32)> {
     let year: i32 = year_str.parse::<i32>().ok()? * sign;
     let month: u32 = caps.get(3)?.as_str().parse().ok()?;
     let day: u32 = caps.get(4)?.as_str().parse().ok()?;
-    // Return absolute year as string for display
     Some((year, year_str, month, day))
 }

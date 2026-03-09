@@ -1,5 +1,5 @@
 use autodesc::desc_options::DescOptions;
-use autodesc::long_desc::generate_long_description;
+use autodesc::long_desc::LongDescGenerator;
 use autodesc::short_desc::ShortDescription;
 use autodesc::wikidata::WikiData;
 use autodesc::wikidata_item::WikiDataItem;
@@ -142,7 +142,7 @@ async fn test_long_desc_en_male_writer_deceased() {
         ..Default::default()
     };
 
-    let result = generate_long_description(&sd, "Q42", &claims, &opt, &mut wd).await;
+    let result = LongDescGenerator::generate(&sd, "Q42", &claims, &opt, &mut wd).await;
     assert!(result.is_some(), "Should produce a long description");
     let desc = result.unwrap();
 
@@ -182,7 +182,7 @@ async fn test_long_desc_en_female_alive() {
         ..Default::default()
     };
 
-    let result = generate_long_description(&sd, "Q999", &claims, &opt, &mut wd).await;
+    let result = LongDescGenerator::generate(&sd, "Q999", &claims, &opt, &mut wd).await;
     assert!(result.is_some());
     let desc = result.unwrap();
 
@@ -221,7 +221,7 @@ async fn test_long_desc_returns_none_for_non_person() {
         ..Default::default()
     };
 
-    let result = generate_long_description(&sd, "Q100", &claims, &opt, &mut wd).await;
+    let result = LongDescGenerator::generate(&sd, "Q100", &claims, &opt, &mut wd).await;
     assert!(result.is_none(), "Non-person should return None");
 }
 
@@ -246,7 +246,7 @@ async fn test_long_desc_returns_none_for_unsupported_lang() {
         ..Default::default()
     };
 
-    let result = generate_long_description(&sd, "Q42", &claims, &opt, &mut wd).await;
+    let result = LongDescGenerator::generate(&sd, "Q42", &claims, &opt, &mut wd).await;
     assert!(result.is_none(), "Unsupported language should return None");
 }
 
@@ -309,7 +309,7 @@ async fn test_long_desc_nl() {
         ..Default::default()
     };
 
-    let result = generate_long_description(&sd, "Q42", &claims, &opt, &mut wd).await;
+    let result = LongDescGenerator::generate(&sd, "Q42", &claims, &opt, &mut wd).await;
     assert!(
         result.is_some(),
         "Dutch long description should be produced"
@@ -385,7 +385,7 @@ async fn test_long_desc_fr() {
         ..Default::default()
     };
 
-    let result = generate_long_description(&sd, "Q42", &claims, &opt, &mut wd).await;
+    let result = LongDescGenerator::generate(&sd, "Q42", &claims, &opt, &mut wd).await;
     assert!(
         result.is_some(),
         "French long description should be produced"
@@ -420,7 +420,7 @@ async fn test_long_desc_link_mode_wikidata() {
         ..Default::default()
     };
 
-    let result = generate_long_description(&sd, "Q42", &claims, &opt, &mut wd).await;
+    let result = LongDescGenerator::generate(&sd, "Q42", &claims, &opt, &mut wd).await;
     assert!(result.is_some());
     let desc = result.unwrap();
 
@@ -454,7 +454,7 @@ async fn test_long_desc_link_mode_wiki() {
         ..Default::default()
     };
 
-    let result = generate_long_description(&sd, "Q42", &claims, &opt, &mut wd).await;
+    let result = LongDescGenerator::generate(&sd, "Q42", &claims, &opt, &mut wd).await;
     assert!(result.is_some());
     let desc = result.unwrap();
 
@@ -492,7 +492,7 @@ async fn test_long_desc_link_mode_wikipedia() {
         ..Default::default()
     };
 
-    let result = generate_long_description(&sd, "Q42", &claims, &opt, &mut wd).await;
+    let result = LongDescGenerator::generate(&sd, "Q42", &claims, &opt, &mut wd).await;
     assert!(result.is_some());
     let desc = result.unwrap();
 
@@ -540,7 +540,7 @@ async fn test_long_desc_multiple_occupations() {
         ..Default::default()
     };
 
-    let result = generate_long_description(&sd, "Q1", &claims, &opt, &mut wd).await;
+    let result = LongDescGenerator::generate(&sd, "Q1", &claims, &opt, &mut wd).await;
     assert!(result.is_some());
     let desc = result.unwrap();
     // Both occupations should appear
@@ -575,7 +575,7 @@ async fn test_long_desc_minimal_person() {
         ..Default::default()
     };
 
-    let result = generate_long_description(&sd, "Q1", &claims, &opt, &mut wd).await;
+    let result = LongDescGenerator::generate(&sd, "Q1", &claims, &opt, &mut wd).await;
     // Should still return Some (even if short), not panic
     assert!(
         result.is_some(),
@@ -607,7 +607,7 @@ async fn test_long_desc_p107_person() {
         ..Default::default()
     };
 
-    let result = generate_long_description(&sd, "Q1", &claims, &opt, &mut wd).await;
+    let result = LongDescGenerator::generate(&sd, "Q1", &claims, &opt, &mut wd).await;
     assert!(
         result.is_some(),
         "P107=Q215627 should produce a long description"
@@ -637,7 +637,7 @@ async fn test_long_desc_batch_load_called() {
         ..Default::default()
     };
 
-    generate_long_description(&sd, "Q42", &claims_male_writer_deceased(), &opt, &mut wd).await;
+    LongDescGenerator::generate(&sd, "Q42", &claims_male_writer_deceased(), &opt, &mut wd).await;
     // MockServer verifies `.expect(1)` when dropped
 }
 
