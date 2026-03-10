@@ -5,7 +5,7 @@ use axum::{
     Router,
     error_handling::HandleErrorLayer,
     extract::{Query, State},
-    http::StatusCode,
+    http::{HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::get,
 };
@@ -16,6 +16,7 @@ use tower::BoxError;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
+use tower_http::set_header::response::SetResponseHeaderLayer;
 use tower_http::timeout::TimeoutLayer;
 
 use autodesc::desc_options::DescOptions;
@@ -452,6 +453,10 @@ async fn main() {
         .route("/", get(api_handler))
         .with_state(state)
         .layer(CompressionLayer::new())
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=3600"),
+        ))
         .layer(CorsLayer::permissive())
         .layer(TimeoutLayer::new(Duration::from_secs(timeout_sec)))
         .layer(
@@ -481,3 +486,7 @@ async fn main() {
 
     axum::serve(listener, app).await.expect("Server error");
 }
+
+/*
+toolforge webservice buildservice stop; toolforge webservice buildservice start --mount=none --mem 5Gi --cpu 3
+ */
