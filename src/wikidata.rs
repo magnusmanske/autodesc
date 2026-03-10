@@ -1,16 +1,31 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use moka::future::Cache;
 use regex::Regex;
 use reqwest::Client;
 use serde_json::Value;
+use tokio::sync::Semaphore;
 
 pub use crate::wikidata_item::{MAIN_LANGUAGES, WikiDataItem, sanitize_q, unified_id};
 
 fn year_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"^([+-])0*(\d+)").expect("year regex is valid"))
+}
+
+static SEMAPHORE_LIMIT: AtomicUsize = AtomicUsize::new(3);
+
+/// Set the maximum number of concurrent Wikidata API requests.
+/// Must be called before the semaphore is first used to have any effect.
+pub fn set_semaphore_limit(n: usize) {
+    SEMAPHORE_LIMIT.store(n, Ordering::Relaxed);
+}
+
+fn get_semaphore() -> &'static Arc<Semaphore> {
+    static SEM: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    SEM.get_or_init(|| Arc::new(Semaphore::new(SEMAPHORE_LIMIT.load(Ordering::Relaxed))))
 }
 
 /// The main Wikidata client that fetches and caches entities.
@@ -100,6 +115,7 @@ impl WikiData {
                 ("format", "json"),
             ];
 
+            let _permit = get_semaphore().acquire().await?;
             let resp = self
                 .client
                 .get(&self.api_url)
