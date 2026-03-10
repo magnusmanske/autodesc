@@ -104,40 +104,45 @@ impl WikiData {
 
         // Split into batches of at most `max_get_entities`.
         for chunk in to_load.chunks(self.max_get_entities) {
-            let ids = chunk.join("|");
-            let params = [
-                ("action", "wbgetentities"),
-                ("ids", &ids),
-                (
-                    "props",
-                    "info|aliases|labels|descriptions|claims|sitelinks|datatype",
-                ),
-                ("format", "json"),
-            ];
-
-            let _permit = get_semaphore().acquire().await?;
-            let resp = self
-                .client
-                .get(&self.api_url)
-                .query(&params)
-                .send()
-                .await?
-                .json::<Value>()
-                .await?;
-
-            if let Some(entities) = resp.get("entities").and_then(|e| e.as_object()) {
-                for (k, v) in entities {
-                    let q = unified_id(k);
-                    let item = WikiDataItem::new(v.clone());
-                    // Populate global item cache with freshly loaded items.
-                    if let Some(cache) = &self.item_cache {
-                        cache.insert(q.clone(), item.clone()).await;
-                    }
-                    self.items.insert(q, item);
-                }
-            }
+            self.load_item_chunk(chunk).await?;
         }
 
+        Ok(())
+    }
+
+    async fn load_item_chunk(&mut self, chunk: &[String]) -> Result<(), anyhow::Error> {
+        let ids = chunk.join("|");
+        let params = [
+            ("action", "wbgetentities"),
+            ("ids", &ids),
+            (
+                "props",
+                "info|aliases|labels|descriptions|claims|sitelinks|datatype",
+            ),
+            ("format", "json"),
+        ];
+        let _permit = get_semaphore().acquire().await?;
+        let resp = self
+            .client
+            .get(&self.api_url)
+            .query(&params)
+            .send()
+            .await?
+            .json::<Value>()
+            .await?;
+        drop(_permit);
+
+        if let Some(entities) = resp.get("entities").and_then(|e| e.as_object()) {
+            for (k, v) in entities {
+                let q = unified_id(k);
+                let item = WikiDataItem::new(v.clone());
+                // Populate global item cache with freshly loaded items.
+                if let Some(cache) = &self.item_cache {
+                    cache.insert(q.clone(), item.clone()).await;
+                }
+                self.items.insert(q, item);
+            }
+        }
         Ok(())
     }
 
