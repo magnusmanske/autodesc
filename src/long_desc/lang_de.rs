@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
 use serde_json::Value;
 
 use crate::short_desc::ShortDescription;
@@ -32,6 +35,17 @@ const CFG: LangConfig = LangConfig {
     be_present_neutral: "ist",
     be_past_neutral: "war",
 };
+
+/// German nationality adjective stems keyed by Wikidata country Q-ID.
+/// Loaded once from the embedded JSON file.
+fn de_adj_base_for_country(country_q: &str) -> Option<&'static str> {
+    static MAP: OnceLock<HashMap<String, String>> = OnceLock::new();
+    let map = MAP.get_or_init(|| {
+        serde_json::from_str(include_str!("../../data/de_nationality_adjectives.json"))
+            .unwrap_or_default()
+    });
+    map.get(country_q).map(String::as_str)
+}
 
 /// Separator for German lists: "a, b und c".
 fn get_sep_after_de(len: usize, pos: usize) -> &'static str {
@@ -84,8 +98,25 @@ impl LangGenerator for LangDe {
                 .get_item(country_q)
                 .map(|i| i.get_label(Some(&state.lang)))
                 .unwrap_or_default();
-            let nationality =
-                sd.get_nationality_from_country(&country_label, Some(country_q), &state.lang, wd);
+
+            // Get adjective base in priority order:
+            // 1. Static Q-ID table (most reliable)
+            // 2. P1549 lowercase value (Wikidata adjective form, if present)
+            // 3. Noun fallback from get_nationality_from_country (used as-is)
+            let suffix = if state.is_male { "er" } else { "e" };
+            let nationality = de_adj_base_for_country(country_q)
+                .map(|s| s.to_string())
+                .or_else(|| wd.get_item(country_q).and_then(|i| i.get_demonym_adjective_base("de")))
+                .map(|base| format!("{}{}", base, suffix))
+                .unwrap_or_else(|| {
+                    sd.get_nationality_from_country(
+                        &country_label,
+                        Some(country_q),
+                        &state.lang,
+                        wd,
+                    )
+                });
+
             if k > 0 {
                 state.push_text("-");
             }

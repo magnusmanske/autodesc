@@ -145,6 +145,32 @@ impl WikiDataItem {
         None
     }
 
+    /// Get the adjectival base form of the demonym (P1549) for `lang`.
+    /// For German: adjectives are always lowercase while nouns are always capitalized,
+    /// so the first P1549 "de" value that starts with a lowercase letter is the adjective.
+    pub fn get_demonym_adjective_base(&self, lang: &str) -> Option<String> {
+        if lang != "de" {
+            return None;
+        }
+
+        let claims = self.get_claims_for_property("P1549");
+        for claim in &claims {
+            let v = claim
+                .get("mainsnak")
+                .and_then(|s| s.get("datavalue"))
+                .and_then(|dv| dv.get("value"))?;
+            if v.get("language").and_then(|l| l.as_str()) != Some("de") {
+                continue;
+            }
+            if let Some(t) = v.get("text").and_then(|t| t.as_str()) {
+                if t.chars().next().map_or(false, |c| c.is_lowercase()) {
+                    return Some(t.to_string());
+                }
+            }
+        }
+        None
+    }
+
     /// Get the demonym (P1549) for this item in the given language.
     /// P1549 values are monolingualtext, so we look for the one matching `lang`.
     pub fn get_demonym(&self, lang: &str) -> Option<String> {
