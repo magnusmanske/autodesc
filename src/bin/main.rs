@@ -212,6 +212,11 @@ async fn api_handler(State(state): State<AppState>, Query(params): Query<ApiPara
         args.lang = DEFAULT_LANGUAGE.to_string();
     }
 
+    // For HTML output with media enabled, default to a 200px thumbnail so images are visible.
+    if args.format == "html" && args.media == "1" && args.thumb.is_empty() {
+        args.thumb = "200".to_string();
+    }
+
     // If no Q is provided, return the index HTML
     let q_raw = match &args.q {
         Some(q) if !q.is_empty() => q.clone(),
@@ -396,6 +401,32 @@ fn render_jsonfm(
     Html(html).into_response()
 }
 
+/// Returns `(thumburl, descriptionurl)` for the first available thumbnail in the response,
+/// trying image types in priority order.
+fn first_thumbnail(response: &ApiResponse) -> Option<(String, String)> {
+    let thumbnails = response.thumbnails.as_ref()?.as_object()?;
+    let media = response.media.as_ref()?.as_object()?;
+
+    for media_type in &["image", "coat_of_arms", "logo", "flag", "seal", "banner", "map", "osm"] {
+        if let Some(files) = media.get(*media_type).and_then(|v| v.as_array()) {
+            for file in files {
+                if let Some(filename) = file.as_str() {
+                    if let Some(info) = thumbnails.get(filename) {
+                        if let Some(thumburl) = info.get("thumburl").and_then(|v| v.as_str()) {
+                            let descurl = info
+                                .get("descriptionurl")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(thumburl);
+                            return Some((thumburl.to_string(), descurl.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 fn render_html(
     args: &ApiParams,
     q: String,
@@ -410,6 +441,18 @@ fn render_html(
         html_escape::encode_text(&q),
         html_escape::encode_text(&q)
     ));
+
+    if let Some((thumburl, descurl)) = first_thumbnail(response) {
+        html.push_str(&format!(
+            "<div style='float:right;margin:0 0 1em 1em;'>\
+             <a href='{descurl}' target='_blank'>\
+             <img src='{thumburl}' style='max-width:200px;max-height:200px;display:block;'/>\
+             </a></div>",
+            descurl = html_escape::encode_quoted_attribute(&descurl),
+            thumburl = html_escape::encode_quoted_attribute(&thumburl),
+        ));
+    }
+
     if args.links == "wiki" {
         html.push_str(&format!(
             "<pre style='white-space:pre-wrap;font-size:11pt'>{}</pre>",
@@ -418,6 +461,7 @@ fn render_html(
     } else {
         html.push_str(&format!("<p>{}</p>", response.result));
     }
+    html.push_str("<div style='clear:both'></div>");
     html.push_str("<hr/><div style='font-size:8pt;'>This text was generated automatically from Wikidata using <a href='/'>AutoDesc</a>.</div>");
     html.push_str("</body></html>");
     Html(html).into_response()
