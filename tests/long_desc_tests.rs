@@ -123,7 +123,7 @@ fn insert_item_json(wd: &mut WikiData, id: &str, raw: Value) {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_en_male_writer_deceased() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("POST"))
+    Mock::given(method("GET"))
         .and(path("/w/api.php"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(fake_wbgetentities(fake_related_entities())),
@@ -163,7 +163,7 @@ async fn test_long_desc_en_male_writer_deceased() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_en_female_alive() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("POST"))
+    Mock::given(method("GET"))
         .and(path("/w/api.php"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(fake_wbgetentities(fake_related_entities())),
@@ -204,7 +204,7 @@ async fn test_long_desc_en_female_alive() {
 async fn test_long_desc_returns_none_for_non_person() {
     let mock_server = MockServer::start().await;
     // The mock should never be called since we bail out early
-    Mock::given(method("POST"))
+    Mock::given(method("GET"))
         .and(path("/w/api.php"))
         .respond_with(ResponseTemplate::new(200).set_body_json(fake_wbgetentities(json!({}))))
         .mount(&mock_server)
@@ -229,7 +229,7 @@ async fn test_long_desc_returns_none_for_non_person() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_returns_none_for_unsupported_lang() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("POST"))
+    Mock::given(method("GET"))
         .and(path("/w/api.php"))
         .respond_with(ResponseTemplate::new(200).set_body_json(fake_wbgetentities(json!({}))))
         .mount(&mock_server)
@@ -281,7 +281,7 @@ async fn test_long_desc_nl() {
     });
 
     let mock_server = MockServer::start().await;
-    Mock::given(method("POST"))
+    Mock::given(method("GET"))
         .and(path("/w/api.php"))
         .respond_with(ResponseTemplate::new(200).set_body_json(fake_wbgetentities(dutch_entities)))
         .mount(&mock_server)
@@ -357,7 +357,7 @@ async fn test_long_desc_fr() {
     });
 
     let mock_server = MockServer::start().await;
-    Mock::given(method("POST"))
+    Mock::given(method("GET"))
         .and(path("/w/api.php"))
         .respond_with(ResponseTemplate::new(200).set_body_json(fake_wbgetentities(french_entities)))
         .mount(&mock_server)
@@ -401,7 +401,7 @@ async fn test_long_desc_fr() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_link_mode_wikidata() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("POST"))
+    Mock::given(method("GET"))
         .and(path("/w/api.php"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(fake_wbgetentities(fake_related_entities())),
@@ -435,7 +435,7 @@ async fn test_long_desc_link_mode_wikidata() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_link_mode_wiki() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("POST"))
+    Mock::given(method("GET"))
         .and(path("/w/api.php"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(fake_wbgetentities(fake_related_entities())),
@@ -473,7 +473,7 @@ async fn test_long_desc_link_mode_wiki() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_link_mode_wikipedia() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("POST"))
+    Mock::given(method("GET"))
         .and(path("/w/api.php"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(fake_wbgetentities(fake_related_entities())),
@@ -514,7 +514,7 @@ async fn test_long_desc_multiple_occupations() {
     });
 
     let mock_server = MockServer::start().await;
-    Mock::given(method("POST"))
+    Mock::given(method("GET"))
         .and(path("/w/api.php"))
         .respond_with(ResponseTemplate::new(200).set_body_json(fake_wbgetentities(entities)))
         .mount(&mock_server)
@@ -554,7 +554,7 @@ async fn test_long_desc_multiple_occupations() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_minimal_person() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("POST"))
+    Mock::given(method("GET"))
         .and(path("/w/api.php"))
         .respond_with(ResponseTemplate::new(200).set_body_json(fake_wbgetentities(json!({}))))
         .mount(&mock_server)
@@ -587,7 +587,7 @@ async fn test_long_desc_minimal_person() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_p107_person() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("POST"))
+    Mock::given(method("GET"))
         .and(path("/w/api.php"))
         .respond_with(ResponseTemplate::new(200).set_body_json(fake_wbgetentities(json!({}))))
         .mount(&mock_server)
@@ -618,7 +618,7 @@ async fn test_long_desc_p107_person() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_batch_load_called() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("POST"))
+    Mock::given(method("GET"))
         .and(path("/w/api.php"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(fake_wbgetentities(fake_related_entities())),
@@ -682,7 +682,7 @@ async fn test_load_item_long_mode() {
         "Q6581097": fake_item("Q6581097", "male")
     });
 
-    Mock::given(method("POST"))
+    Mock::given(method("GET"))
         .and(path("/w/api.php"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(fake_wbgetentities(main_entity.clone())),
@@ -691,7 +691,7 @@ async fn test_load_item_long_mode() {
         .mount(&mock_server)
         .await;
 
-    Mock::given(method("POST"))
+    Mock::given(method("GET"))
         .and(path("/w/api.php"))
         .respond_with(ResponseTemplate::new(200).set_body_json(fake_wbgetentities(related)))
         .mount(&mock_server)

@@ -362,7 +362,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_load_entity() {
         let mock_server = MockServer::start().await;
-        Mock::given(method("POST"))
+        Mock::given(method("GET"))
             .and(path("/w/api.php"))
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(fake_wbgetentities(fake_q12345())),
@@ -392,7 +392,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_batch_loading() {
         let mock_server = MockServer::start().await;
-        Mock::given(method("POST"))
+        Mock::given(method("GET"))
             .and(path("/w/api.php"))
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(fake_wbgetentities(fake_q42_q1())),
@@ -410,7 +410,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_clear() {
         let mock_server = MockServer::start().await;
-        Mock::given(method("POST"))
+        Mock::given(method("GET"))
             .and(path("/w/api.php"))
             .respond_with(ResponseTemplate::new(200).set_body_json(fake_wbgetentities(
                 serde_json::json!({
@@ -433,7 +433,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_batch_dedup() {
         let mock_server = MockServer::start().await;
-        Mock::given(method("POST"))
+        Mock::given(method("GET"))
             .and(path("/w/api.php"))
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(fake_wbgetentities(fake_q42_q1())),
@@ -457,7 +457,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_already_loaded_skipped() {
         let mock_server = MockServer::start().await;
-        Mock::given(method("POST"))
+        Mock::given(method("GET"))
             .and(path("/w/api.php"))
             .respond_with(ResponseTemplate::new(200).set_body_json(fake_wbgetentities(
                 serde_json::json!({
