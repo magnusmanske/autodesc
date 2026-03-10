@@ -2,17 +2,17 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use axum::{
+    Router,
     error_handling::HandleErrorLayer,
     extract::{Query, State},
     http::StatusCode,
     response::{Html, IntoResponse, Response},
     routing::get,
-    Router,
 };
-use tower::BoxError;
 use moka::future::Cache;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use tower::BoxError;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
@@ -21,7 +21,7 @@ use tower_http::timeout::TimeoutLayer;
 use autodesc::desc_options::DescOptions;
 use autodesc::media::MediaGenerator;
 use autodesc::short_desc::ShortDescription;
-use autodesc::wikidata::{sanitize_q, WikiData, WikiDataItem};
+use autodesc::wikidata::{WikiData, WikiDataItem, sanitize_q};
 
 /// Shared application state holding both global caches.
 #[derive(Clone)]
@@ -183,15 +183,16 @@ fn cached_response(cached_json: String, args: &ApiParams) -> Response {
         }
         _ => {
             if let Some(ref callback) = args.callback
-                && !callback.is_empty() {
-                    let jsonp = format!("{}({})", callback, cached_json);
-                    return (
-                        StatusCode::OK,
-                        [("content-type", "application/javascript; charset=utf-8")],
-                        jsonp,
-                    )
-                        .into_response();
-                }
+                && !callback.is_empty()
+            {
+                let jsonp = format!("{}({})", callback, cached_json);
+                return (
+                    StatusCode::OK,
+                    [("content-type", "application/javascript; charset=utf-8")],
+                    jsonp,
+                )
+                    .into_response();
+            }
             (
                 StatusCode::OK,
                 [("content-type", "application/json; charset=utf-8")],
@@ -202,10 +203,7 @@ fn cached_response(cached_json: String, args: &ApiParams) -> Response {
     }
 }
 
-async fn api_handler(
-    State(state): State<AppState>,
-    Query(params): Query<ApiParams>,
-) -> Response {
+async fn api_handler(State(state): State<AppState>, Query(params): Query<ApiParams>) -> Response {
     let mut args = params.clone();
 
     // Normalize language
@@ -243,10 +241,6 @@ async fn api_handler(
         return cached_response(cached, &args);
     }
 
-    // Create a WikiData client backed by the shared item cache.
-    let mut wd = WikiData::new().with_item_cache(state.item_cache.clone());
-    let sd = ShortDescription::new();
-
     // Build description options
     let mut opt = DescOptions {
         q: q.clone(),
@@ -255,6 +249,10 @@ async fn api_handler(
         mode: args.mode.clone(),
         ..Default::default()
     };
+
+    // Create a WikiData client backed by the shared item cache.
+    let mut wd = WikiData::new().with_item_cache(state.item_cache.clone());
+    let sd = ShortDescription::new();
 
     // Generate description
     let (_result_q, output) = sd.load_item(&q, &mut opt, &mut wd).await;
@@ -296,10 +294,29 @@ async fn api_handler(
         thumbnails: None,
     };
 
+    add_media(&args, &q, wd, &mut response).await;
+
+    // Serialize the response and store in the output cache, but skip caching
+    // error results so they can be retried on the next request.
+    let cached_json = serde_json::to_string(&response).unwrap_or_default();
+    let cannot_describe = format!("<i>{}</i>", sd.txt("cannot_describe", &args.lang));
+    if response.result != cannot_describe {
+        state.output_cache.insert(output_key, cached_json).await;
+    }
+
+    // Format the response
+    match args.format.as_str() {
+        "html" => render_html(&args, q, label, &response),
+        "jsonfm" => render_jsonfm(&args, &response),
+        _ => render_json(args, response),
+    }
+}
+
+async fn add_media(args: &ApiParams, q: &str, mut wd: WikiData, response: &mut ApiResponse) {
     // Handle media generation
     if args.media == "1" {
         let media_result =
-            MediaGenerator::generate_media(&q, &args.thumb, args.user_zoom, &mut wd).await;
+            MediaGenerator::generate_media(q, &args.thumb, args.user_zoom, &mut wd).await;
 
         // Build media JSON (without thumbnails)
         let mut media_json: HashMap<String, Value> = HashMap::new();
@@ -314,97 +331,95 @@ async fn api_handler(
                 Some(serde_json::to_value(&media_result.thumbnails).unwrap_or_default());
         }
     }
+}
 
-    // Serialize the response and store in the output cache, but skip caching
-    // error results so they can be retried on the next request.
-    let cached_json = serde_json::to_string(&response).unwrap_or_default();
-    let cannot_describe = format!("<i>{}</i>", sd.txt("cannot_describe", &args.lang));
-    if response.result != cannot_describe {
-        state.output_cache.insert(output_key, cached_json).await;
+fn render_json(args: ApiParams, response: ApiResponse) -> axum::http::Response<axum::body::Body> {
+    // "json" or anything else (default)
+    let json_str = serde_json::to_string(&response).unwrap_or_default();
+
+    // Support JSONP callback
+    if let Some(ref callback) = args.callback
+        && !callback.is_empty()
+    {
+        let jsonp = format!("{}({})", callback, json_str);
+        return (
+            StatusCode::OK,
+            [("content-type", "application/javascript; charset=utf-8")],
+            jsonp,
+        )
+            .into_response();
     }
 
-    // Format the response
-    match args.format.as_str() {
-        "html" => {
-            let mut html =
-                String::from("<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body>");
-            html.push_str("<style>a.redlink { color:red }</style>");
-            html.push_str(&format!(
-                "<h1>{} (<a href='//www.wikidata.org/wiki/{}'>{}</a>)</h1>",
-                html_escape::encode_text(&label),
-                html_escape::encode_text(&q),
-                html_escape::encode_text(&q)
-            ));
-            if args.links == "wiki" {
-                html.push_str(&format!(
-                    "<pre style='white-space:pre-wrap;font-size:11pt'>{}</pre>",
-                    response.result
-                ));
-            } else {
-                html.push_str(&format!("<p>{}</p>", response.result));
-            }
-            html.push_str("<hr/><div style='font-size:8pt;'>This text was generated automatically from Wikidata using <a href='/'>AutoDesc</a>.</div>");
-            html.push_str("</body></html>");
-            Html(html).into_response()
-        }
-        "jsonfm" => {
-            // Pretty-printed JSON in an HTML wrapper
-            let json_text = serde_json::to_string_pretty(&response).unwrap_or_default();
+    (
+        StatusCode::OK,
+        [("content-type", "application/json; charset=utf-8")],
+        json_str,
+    )
+        .into_response()
+}
 
-            // Build a link to the JSON version
-            let mut json_params: Vec<String> = Vec::new();
-            if let Some(ref q_val) = args.q {
-                json_params.push(format!("q={}", html_escape::encode_text(q_val)));
-            }
-            json_params.push(format!("lang={}", html_escape::encode_text(&args.lang)));
-            json_params.push(format!("mode={}", html_escape::encode_text(&args.mode)));
-            json_params.push(format!("links={}", html_escape::encode_text(&args.links)));
-            json_params.push("format=json".to_string());
-            if !args.media.is_empty() {
-                json_params.push(format!("media={}", html_escape::encode_text(&args.media)));
-            }
-            if !args.thumb.is_empty() {
-                json_params.push(format!("thumb={}", html_escape::encode_text(&args.thumb)));
-            }
+fn render_jsonfm(
+    args: &ApiParams,
+    response: &ApiResponse,
+) -> axum::http::Response<axum::body::Body> {
+    // Pretty-printed JSON in an HTML wrapper
+    let json_text = serde_json::to_string_pretty(response).unwrap_or_default();
 
-            let json_link = format!("<a href='?{}'>format=json</a>", json_params.join("&"));
-
-            let mut html =
-                String::from("<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body>");
-            html.push_str("<p>You are looking at the HTML representation of the JSON format. HTML is good for debugging, but is unsuitable for application use.</p>");
-            html.push_str(&format!(
-                "<p>Specify the format parameter to change the output format. To see the non-HTML representation of the JSON format, set {}.</p>",
-                json_link
-            ));
-            html.push_str("<hr/><pre style='white-space:pre-wrap'>");
-            html.push_str(&html_escape::encode_text(&json_text));
-            html.push_str("</pre></body></html>");
-            Html(html).into_response()
-        }
-        _ => {
-            // "json" or anything else (default)
-            let json_str = serde_json::to_string(&response).unwrap_or_default();
-
-            // Support JSONP callback
-            if let Some(ref callback) = args.callback
-                && !callback.is_empty() {
-                    let jsonp = format!("{}({})", callback, json_str);
-                    return (
-                        StatusCode::OK,
-                        [("content-type", "application/javascript; charset=utf-8")],
-                        jsonp,
-                    )
-                        .into_response();
-                }
-
-            (
-                StatusCode::OK,
-                [("content-type", "application/json; charset=utf-8")],
-                json_str,
-            )
-                .into_response()
-        }
+    // Build a link to the JSON version
+    let mut json_params: Vec<String> = Vec::new();
+    if let Some(ref q_val) = args.q {
+        json_params.push(format!("q={}", html_escape::encode_text(q_val)));
     }
+    json_params.push(format!("lang={}", html_escape::encode_text(&args.lang)));
+    json_params.push(format!("mode={}", html_escape::encode_text(&args.mode)));
+    json_params.push(format!("links={}", html_escape::encode_text(&args.links)));
+    json_params.push("format=json".to_string());
+    if !args.media.is_empty() {
+        json_params.push(format!("media={}", html_escape::encode_text(&args.media)));
+    }
+    if !args.thumb.is_empty() {
+        json_params.push(format!("thumb={}", html_escape::encode_text(&args.thumb)));
+    }
+
+    let json_link = format!("<a href='?{}'>format=json</a>", json_params.join("&"));
+
+    let mut html = String::from("<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body>");
+    html.push_str("<p>You are looking at the HTML representation of the JSON format. HTML is good for debugging, but is unsuitable for application use.</p>");
+    html.push_str(&format!(
+        "<p>Specify the format parameter to change the output format. To see the non-HTML representation of the JSON format, set {}.</p>",
+        json_link
+    ));
+    html.push_str("<hr/><pre style='white-space:pre-wrap'>");
+    html.push_str(&html_escape::encode_text(&json_text));
+    html.push_str("</pre></body></html>");
+    Html(html).into_response()
+}
+
+fn render_html(
+    args: &ApiParams,
+    q: String,
+    label: String,
+    response: &ApiResponse,
+) -> axum::http::Response<axum::body::Body> {
+    let mut html = String::from("<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body>");
+    html.push_str("<style>a.redlink { color:red }</style>");
+    html.push_str(&format!(
+        "<h1>{} (<a href='//www.wikidata.org/wiki/{}'>{}</a>)</h1>",
+        html_escape::encode_text(&label),
+        html_escape::encode_text(&q),
+        html_escape::encode_text(&q)
+    ));
+    if args.links == "wiki" {
+        html.push_str(&format!(
+            "<pre style='white-space:pre-wrap;font-size:11pt'>{}</pre>",
+            response.result
+        ));
+    } else {
+        html.push_str(&format!("<p>{}</p>", response.result));
+    }
+    html.push_str("<hr/><div style='font-size:8pt;'>This text was generated automatically from Wikidata using <a href='/'>AutoDesc</a>.</div>");
+    html.push_str("</body></html>");
+    Html(html).into_response()
 }
 
 #[tokio::main]
@@ -422,16 +437,23 @@ async fn main() {
     let max_concurrency = std::env::var("AUTODESC_MAX_CONCURRENCY")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(64);
+        .unwrap_or(usize::MAX);
 
     tracing::info!(max_concurrency, "Concurrency limit");
+
+    let timeout_sec = std::env::var("AUTODESC_TIMEOUT_SEC")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(u64::MAX);
+
+    tracing::info!(timeout_sec, "Timeout limit");
 
     let app = Router::new()
         .route("/", get(api_handler))
         .with_state(state)
         .layer(CompressionLayer::new())
         .layer(CorsLayer::permissive())
-        .layer(TimeoutLayer::new(Duration::from_secs(60)))
+        .layer(TimeoutLayer::new(Duration::from_secs(timeout_sec)))
         .layer(
             ServiceBuilder::new()
                 .layer(HandleErrorLayer::new(|_: BoxError| async {
