@@ -11,6 +11,7 @@ use axum::{
 use moka::future::Cache;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::timeout::TimeoutLayer;
 
@@ -418,6 +419,7 @@ async fn main() {
     let app = Router::new()
         .route("/", get(api_handler))
         .with_state(state)
+        .layer(CompressionLayer::new())
         .layer(CorsLayer::permissive())
         .layer(TimeoutLayer::new(Duration::from_secs(60)));
 
