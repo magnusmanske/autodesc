@@ -437,14 +437,14 @@ async fn main() {
     let max_concurrency = std::env::var("AUTODESC_MAX_CONCURRENCY")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(usize::MAX);
+        .unwrap_or(5000);
 
     tracing::info!(max_concurrency, "Concurrency limit");
 
     let timeout_sec = std::env::var("AUTODESC_TIMEOUT_SEC")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(u64::MAX);
+        .unwrap_or(120);
 
     tracing::info!(timeout_sec, "Timeout limit");
 

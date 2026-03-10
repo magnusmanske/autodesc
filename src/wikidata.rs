@@ -15,7 +15,7 @@ fn year_regex() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"^([+-])0*(\d+)").expect("year regex is valid"))
 }
 
-static SEMAPHORE_LIMIT: AtomicUsize = AtomicUsize::new(usize::MAX);
+static SEMAPHORE_LIMIT: AtomicUsize = AtomicUsize::new(500);
 
 /// Set the maximum number of concurrent Wikidata API requests.
 /// Must be called before the semaphore is first used to have any effect.
