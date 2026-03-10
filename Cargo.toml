@@ -17,7 +17,7 @@ path = "src/lib.rs"
 # Web framework
 axum = { version = "0.7", features = ["query"] }
 tokio = { version = "1", features = ["full"] }
-tower = "0.4"
+tower = { version = "0.4", features = ["limit", "load-shed"] }
 tower-http = { version = "0.5", features = ["cors", "timeout", "compression-full"] }
 
 # Serialization

@@ -2,15 +2,18 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use axum::{
+    error_handling::HandleErrorLayer,
     extract::{Query, State},
     http::StatusCode,
     response::{Html, IntoResponse, Response},
     routing::get,
     Router,
 };
+use tower::BoxError;
 use moka::future::Cache;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::timeout::TimeoutLayer;
@@ -416,12 +419,27 @@ async fn main() {
 
     let state = AppState::new();
 
+    let max_concurrency = std::env::var("AUTODESC_MAX_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(64);
+
+    tracing::info!(max_concurrency, "Concurrency limit");
+
     let app = Router::new()
         .route("/", get(api_handler))
         .with_state(state)
         .layer(CompressionLayer::new())
         .layer(CorsLayer::permissive())
-        .layer(TimeoutLayer::new(Duration::from_secs(60)));
+        .layer(TimeoutLayer::new(Duration::from_secs(60)))
+        .layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(|_: BoxError| async {
+                    StatusCode::SERVICE_UNAVAILABLE
+                }))
+                .load_shed()
+                .concurrency_limit(max_concurrency),
+        );
 
     let address = std::env::var("AUTODESC_ADDRESS")
         .ok()
