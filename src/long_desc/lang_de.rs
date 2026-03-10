@@ -37,9 +37,7 @@ const CFG: LangConfig = LangConfig {
 fn get_sep_after_de(len: usize, pos: usize) -> &'static str {
     if pos + 1 == len {
         " "
-    } else if pos == 0 && len == 2 {
-        " und "
-    } else if len == pos + 2 {
+    } else if (pos == 0 && len == 2) || (len == pos + 2) {
         " und "
     } else {
         ", "
@@ -110,11 +108,11 @@ impl LangGenerator for LangDe {
                 && let Some(gendered) = wd
                     .get_item(occ_q)
                     .and_then(|i| i.get_gendered_label(&state.lang, state.is_female))
-                {
-                    state.push_text(&gendered);
-                    state.push_text(sep);
-                    continue;
-                }
+            {
+                state.push_text(&gendered);
+                state.push_text(sep);
+                continue;
+            }
             state.push_item(occ_q, "", sep);
         }
 
@@ -359,7 +357,10 @@ impl LangGenerator for LangDe {
         // Children (P40)
         let children = get_claim_item_ids(claims, "P40");
         if !children.is_empty() {
-            state.push_text(&format!("Zu {}en Kindern z\u{00e4}hlen ", poss.to_lowercase()));
+            state.push_text(&format!(
+                "Zu {}en Kindern z\u{00e4}hlen ",
+                poss.to_lowercase()
+            ));
             for (k, q) in children.iter().enumerate() {
                 state.push_item(q, "", get_sep_after_de(children.len(), k));
             }
@@ -409,11 +410,7 @@ impl LangGenerator for LangDe {
         // Burial place (P119)
         if let Some(burial_q) = get_first_claim_item(claims, "P119") {
             let subj = state.pronoun_subject(&CFG);
-            state.push_item(
-                &burial_q,
-                &format!("{} wurde in ", subj),
-                " begraben. ",
-            );
+            state.push_item(&burial_q, &format!("{} wurde in ", subj), " begraben. ");
         }
     }
 }

@@ -6,7 +6,7 @@ use regex::Regex;
 use reqwest::Client;
 use serde_json::Value;
 
-pub use crate::wikidata_item::{sanitize_q, unified_id, WikiDataItem, MAIN_LANGUAGES};
+pub use crate::wikidata_item::{MAIN_LANGUAGES, WikiDataItem, sanitize_q, unified_id};
 
 fn year_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -73,11 +73,12 @@ impl WikiData {
             }
             // Check global item cache before scheduling an API fetch.
             if let Some(cache) = &self.item_cache
-                && let Some(item) = cache.get(&q).await {
-                    self.items.insert(q.clone(), item);
-                    seen.insert(q);
-                    continue;
-                }
+                && let Some(item) = cache.get(&q).await
+            {
+                self.items.insert(q.clone(), item);
+                seen.insert(q);
+                continue;
+            }
             seen.insert(q.clone());
             to_load.push(q);
         }
@@ -101,8 +102,8 @@ impl WikiData {
 
             let resp = self
                 .client
-                .post(&self.api_url)
-                .form(&params)
+                .get(&self.api_url)
+                .query(&params)
                 .send()
                 .await?
                 .json::<Value>()
@@ -131,11 +132,15 @@ impl WikiData {
     }
 
     /// Fetch JSON from an arbitrary URL via POST.
-    pub async fn post_json(&self, url: &str, params: &[(&str, &str)]) -> anyhow::Result<Value> {
+    pub async fn get_json_params(
+        &self,
+        url: &str,
+        params: &[(&str, &str)],
+    ) -> anyhow::Result<Value> {
         let resp = self
             .client
-            .post(url)
-            .form(params)
+            .get(url)
+            .query(params)
             .send()
             .await?
             .json::<Value>()
@@ -145,8 +150,7 @@ impl WikiData {
 
     /// Fetch JSON from an arbitrary URL via GET.
     pub async fn get_json(&self, url: &str) -> anyhow::Result<Value> {
-        let resp = self.client.get(url).send().await?.json::<Value>().await?;
-        Ok(resp)
+        self.get_json_params(url, &[]).await
     }
 
     /// Extract a year string from a set of claims for a time-valued property.
@@ -174,20 +178,21 @@ impl WikiData {
                 .and_then(|t| t.as_str());
 
             if let Some(time_str) = time_str
-                && let Some(caps) = re.captures(time_str) {
-                    let sign = caps.get(1).map(|m| m.as_str()).unwrap_or("+");
-                    let year = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-                    let mut ret = year.to_string();
-                    if sign == "-" {
-                        let bc = stock
-                            .get("BC")
-                            .and_then(|m| m.get(lang).or_else(|| m.get("en")))
-                            .map(|s| s.as_str())
-                            .unwrap_or("BC");
-                        ret.push_str(bc);
-                    }
-                    return ret;
+                && let Some(caps) = re.captures(time_str)
+            {
+                let sign = caps.get(1).map(|m| m.as_str()).unwrap_or("+");
+                let year = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                let mut ret = year.to_string();
+                if sign == "-" {
+                    let bc = stock
+                        .get("BC")
+                        .and_then(|m| m.get(lang).or_else(|| m.get("en")))
+                        .map(|s| s.as_str())
+                        .unwrap_or("BC");
+                    ret.push_str(bc);
                 }
+                return ret;
+            }
         }
 
         String::new()
@@ -344,8 +349,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/w/api.php"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(fake_wbgetentities(fake_q12345())),
+                ResponseTemplate::new(200).set_body_json(fake_wbgetentities(fake_q12345())),
             )
             .mount(&mock_server)
             .await;
@@ -375,8 +379,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/w/api.php"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(fake_wbgetentities(fake_q42_q1())),
+                ResponseTemplate::new(200).set_body_json(fake_wbgetentities(fake_q42_q1())),
             )
             .mount(&mock_server)
             .await;
@@ -393,14 +396,14 @@ mod tests {
         let mock_server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/w/api.php"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(fake_wbgetentities(serde_json::json!({
+            .respond_with(ResponseTemplate::new(200).set_body_json(fake_wbgetentities(
+                serde_json::json!({
                     "Q42": {
                         "type": "item", "id": "Q42", "ns": 0,
                         "labels": {}, "descriptions": {}, "claims": {}, "sitelinks": {}
                     }
-                }))),
-            )
+                }),
+            )))
             .mount(&mock_server)
             .await;
 
@@ -417,8 +420,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/w/api.php"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(fake_wbgetentities(fake_q42_q1())),
+                ResponseTemplate::new(200).set_body_json(fake_wbgetentities(fake_q42_q1())),
             )
             .expect(1) // only one API call despite 4 input IDs
             .mount(&mock_server)
@@ -441,15 +443,15 @@ mod tests {
         let mock_server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/w/api.php"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(fake_wbgetentities(serde_json::json!({
+            .respond_with(ResponseTemplate::new(200).set_body_json(fake_wbgetentities(
+                serde_json::json!({
                     "Q42": {
                         "type": "item", "id": "Q42", "ns": 0,
                         "labels": { "en": { "language": "en", "value": "Douglas Adams" } },
                         "descriptions": {}, "claims": {}, "sitelinks": {}
                     }
-                }))),
-            )
+                }),
+            )))
             .expect(1) // only one API call despite two load_entity calls
             .mount(&mock_server)
             .await;

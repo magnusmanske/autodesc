@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::wikidata::{sanitize_q, WikiData};
+use crate::wikidata::{WikiData, sanitize_q};
 
 /// Media properties mapped from Wikidata property IDs to human-readable names.
 const MEDIA_PROPS: &[(&str, &str)] = &[
@@ -161,7 +161,7 @@ impl MediaGenerator {
                 ("format", "json"),
             ];
 
-            match wd.post_json(commons_api, &params).await {
+            match wd.get_json_params(commons_api, &params).await {
                 Ok(data) => {
                     if let Some(pages) = data
                         .get("query")
