@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use moka::future::Cache;
 use regex::Regex;
@@ -15,6 +16,9 @@ fn global_client() -> &'static Client {
     CLIENT.get_or_init(|| {
         Client::builder()
             .user_agent("autodesc/0.2.0 (https://github.com/magnusmanske/autodesc; magnusmanske@googlemail.com) reqwest")
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(20))
+            .pool_max_idle_per_host(32)
             .build()
             .expect("Failed to build HTTP client")
     })
