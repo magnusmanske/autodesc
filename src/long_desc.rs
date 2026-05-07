@@ -639,3 +639,318 @@ pub(super) fn parse_time(time: &str) -> Option<(i32, &str, u32, u32)> {
     let day: u32 = caps.get(4)?.as_str().parse().ok()?;
     Some((year, year_str, month, day))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── has_claims ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_has_claims_present() {
+        let claims = serde_json::json!({ "P570": [{}] });
+        assert!(has_claims(&claims, "P570"));
+    }
+
+    #[test]
+    fn test_has_claims_absent() {
+        let claims = serde_json::json!({});
+        assert!(!has_claims(&claims, "P570"));
+    }
+
+    #[test]
+    fn test_has_claims_empty_array() {
+        let claims = serde_json::json!({ "P570": [] });
+        assert!(!has_claims(&claims, "P570"));
+    }
+
+    // ── add_claim_items ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_add_claim_items_basic() {
+        let claims = serde_json::json!({
+            "P106": [{
+                "mainsnak": { "datavalue": { "value": { "entity-type": "item", "id": "Q36180" } } }
+            }]
+        });
+        let mut items: Vec<String> = Vec::new();
+        add_claim_items(&claims, "P106", &mut items);
+        assert_eq!(items, vec!["Q36180"]);
+    }
+
+    #[test]
+    fn test_add_claim_items_deduplication() {
+        let claims = serde_json::json!({
+            "P106": [
+                { "mainsnak": { "datavalue": { "value": { "entity-type": "item", "id": "Q36180" } } } },
+                { "mainsnak": { "datavalue": { "value": { "entity-type": "item", "id": "Q36180" } } } }
+            ]
+        });
+        let mut items: Vec<String> = Vec::new();
+        add_claim_items(&claims, "P106", &mut items);
+        assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn test_add_claim_items_skips_property_type() {
+        let claims = serde_json::json!({
+            "P106": [{
+                "mainsnak": { "datavalue": { "value": { "entity-type": "property", "id": "P31" } } }
+            }]
+        });
+        let mut items: Vec<String> = Vec::new();
+        add_claim_items(&claims, "P106", &mut items);
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn test_add_claim_items_missing_prop() {
+        let claims = serde_json::json!({});
+        let mut items: Vec<String> = Vec::new();
+        add_claim_items(&claims, "P106", &mut items);
+        assert!(items.is_empty());
+    }
+
+    // ── get_first_claim_item ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_get_first_claim_item_returns_first() {
+        let claims = serde_json::json!({
+            "P19": [
+                { "mainsnak": { "datavalue": { "value": { "entity-type": "item", "id": "Q84" } } } },
+                { "mainsnak": { "datavalue": { "value": { "entity-type": "item", "id": "Q350" } } } }
+            ]
+        });
+        assert_eq!(
+            get_first_claim_item(&claims, "P19"),
+            Some("Q84".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_first_claim_item_missing_prop() {
+        let claims = serde_json::json!({});
+        assert_eq!(get_first_claim_item(&claims, "P19"), None);
+    }
+
+    // ── get_claim_item_ids ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_get_claim_item_ids_multiple() {
+        let claims = serde_json::json!({
+            "P106": [
+                { "mainsnak": { "datavalue": { "value": { "entity-type": "item", "id": "Q36180" } } } },
+                { "mainsnak": { "datavalue": { "value": { "entity-type": "item", "id": "Q245068" } } } }
+            ]
+        });
+        let ids = get_claim_item_ids(&claims, "P106");
+        assert_eq!(ids, vec!["Q36180", "Q245068"]);
+    }
+
+    #[test]
+    fn test_get_claim_item_ids_empty() {
+        let claims = serde_json::json!({});
+        assert!(get_claim_item_ids(&claims, "P106").is_empty());
+    }
+
+    // ── extract_claim_date ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_extract_claim_date() {
+        let claim = serde_json::json!({
+            "mainsnak": {
+                "datavalue": {
+                    "value": { "time": "+1952-03-11T00:00:00Z", "precision": 11 }
+                }
+            }
+        });
+        let date = extract_claim_date(&claim).unwrap();
+        assert_eq!(date.time, "+1952-03-11T00:00:00Z");
+        assert_eq!(date.precision, 11);
+    }
+
+    #[test]
+    fn test_extract_claim_date_missing() {
+        let claim = serde_json::json!({});
+        assert!(extract_claim_date(&claim).is_none());
+    }
+
+    #[test]
+    fn test_extract_claim_date_missing_precision_returns_none() {
+        // precision is required by the parser; absent key → None
+        let claim = serde_json::json!({
+            "mainsnak": {
+                "datavalue": {
+                    "value": { "time": "+1952-00-00T00:00:00Z" }
+                }
+            }
+        });
+        assert!(extract_claim_date(&claim).is_none());
+    }
+
+    // ── extract_date_qualifier ────────────────────────────────────────────────
+
+    #[test]
+    fn test_extract_date_qualifier() {
+        let qualifiers = serde_json::json!({
+            "P580": [{
+                "datavalue": {
+                    "value": { "time": "+2000-01-01T00:00:00Z", "precision": 9 }
+                }
+            }]
+        });
+        let date = extract_date_qualifier(&qualifiers, "P580").unwrap();
+        assert_eq!(date.time, "+2000-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn test_extract_date_qualifier_missing() {
+        let qualifiers = serde_json::json!({});
+        assert!(extract_date_qualifier(&qualifiers, "P580").is_none());
+    }
+
+    // ── get_first_claim_string ────────────────────────────────────────────────
+
+    #[test]
+    fn test_get_first_claim_string() {
+        let claims = serde_json::json!({
+            "P513": [{
+                "mainsnak": {
+                    "datavalue": {
+                        "type": "string",
+                        "value": "Noël"
+                    }
+                }
+            }]
+        });
+        assert_eq!(
+            get_first_claim_string(&claims, "P513"),
+            Some("Noël".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_first_claim_string_missing() {
+        let claims = serde_json::json!({});
+        assert_eq!(get_first_claim_string(&claims, "P513"), None);
+    }
+
+    // ── parse_time ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_time_positive() {
+        let (year, year_str, month, day) = parse_time("+1952-03-11T00:00:00Z").unwrap();
+        assert_eq!(year, 1952);
+        assert_eq!(year_str, "1952");
+        assert_eq!(month, 3);
+        assert_eq!(day, 11);
+    }
+
+    #[test]
+    fn test_parse_time_negative() {
+        let (year, year_str, month, day) = parse_time("-00000384-00-00T00:00:00Z").unwrap();
+        assert_eq!(year, -384);
+        assert_eq!(year_str, "384");
+        assert_eq!(month, 0);
+        assert_eq!(day, 0);
+    }
+
+    #[test]
+    fn test_parse_time_invalid() {
+        assert!(parse_time("not-a-date").is_none());
+        assert!(parse_time("").is_none());
+    }
+
+    // ── LongDescState pronouns / be-verbs ─────────────────────────────────────
+
+    fn en_config() -> LangConfig {
+        LangConfig {
+            month_labels: ["", "January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November", "December"],
+            pronoun_subject_male: "He",
+            pronoun_possessive_male: "his",
+            pronoun_subject_female: "She",
+            pronoun_possessive_female: "her",
+            pronoun_subject_neutral: "They",
+            pronoun_possessive_neutral: "their",
+            be_present_singular: "is",
+            be_past_singular: "was",
+            be_present_neutral: "are",
+            be_past_neutral: "were",
+        }
+    }
+
+    fn make_state(is_male: bool, is_female: bool, is_dead: bool) -> LongDescState {
+        LongDescState {
+            lang: "en".to_string(),
+            is_male,
+            is_female,
+            is_dead,
+            fragments: Vec::new(),
+            newline: "\n".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_pronouns_male() {
+        let cfg = en_config();
+        let state = make_state(true, false, false);
+        assert_eq!(state.pronoun_subject(&cfg), "He");
+        assert_eq!(state.pronoun_possessive(&cfg), "his");
+        assert_eq!(state.be_present(&cfg), "is");
+        assert_eq!(state.be_past(&cfg), "was");
+    }
+
+    #[test]
+    fn test_pronouns_female() {
+        let cfg = en_config();
+        let state = make_state(false, true, false);
+        assert_eq!(state.pronoun_subject(&cfg), "She");
+        assert_eq!(state.pronoun_possessive(&cfg), "her");
+        assert_eq!(state.be_present(&cfg), "is");
+        assert_eq!(state.be_past(&cfg), "was");
+    }
+
+    #[test]
+    fn test_pronouns_neutral() {
+        let cfg = en_config();
+        let state = make_state(false, false, false);
+        assert_eq!(state.pronoun_subject(&cfg), "They");
+        assert_eq!(state.pronoun_possessive(&cfg), "their");
+        assert_eq!(state.be_present(&cfg), "are");
+        assert_eq!(state.be_past(&cfg), "were");
+    }
+
+    // ── get_dated_items sorting ───────────────────────────────────────────────
+
+    #[test]
+    fn test_get_dated_items_sorted_by_date() {
+        let claims = serde_json::json!({
+            "P39": [
+                {
+                    "mainsnak": { "datavalue": { "value": { "entity-type": "item", "id": "Q2" } } },
+                    "qualifiers": {
+                        "P580": [{ "datavalue": { "value": { "time": "+2010-01-01T00:00:00Z", "precision": 9 } } }]
+                    }
+                },
+                {
+                    "mainsnak": { "datavalue": { "value": { "entity-type": "item", "id": "Q1" } } },
+                    "qualifiers": {
+                        "P580": [{ "datavalue": { "value": { "time": "+2000-01-01T00:00:00Z", "precision": 9 } } }]
+                    }
+                }
+            ]
+        });
+        let items = get_dated_items(&claims, "P39", &["P642"]);
+        assert_eq!(items.len(), 2);
+        // Earlier date first
+        assert_eq!(items[0].q, "Q1");
+        assert_eq!(items[1].q, "Q2");
+    }
+
+    #[test]
+    fn test_get_dated_items_empty_prop() {
+        let claims = serde_json::json!({});
+        assert!(get_dated_items(&claims, "P39", &[]).is_empty());
+    }
+}

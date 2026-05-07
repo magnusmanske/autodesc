@@ -128,6 +128,61 @@ mod tests {
     }
 
     #[test]
+    fn test_txt_fallback_to_en() {
+        let sd = ShortDescription::new();
+        // "zz" is not a real language; should fall back to the English value
+        let en_val = sd.txt("by", "en");
+        let zz_val = sd.txt("by", "zz");
+        assert_eq!(zz_val, en_val);
+    }
+
+    #[test]
+    fn test_txt2_plain_text() {
+        let mut sd = ShortDescription::new();
+        let mut nationality_map = std::collections::HashMap::new();
+        nationality_map.insert("British".to_string(), "British".to_string());
+        let mut de_map = std::collections::HashMap::new();
+        de_map.insert("nationality".to_string(), nationality_map);
+        sd.language_specific.insert("en".to_string(), de_map);
+
+        assert_eq!(sd.txt2("British", "nationality", "en"), "British");
+    }
+
+    #[test]
+    fn test_txt2_plain_text_replacement() {
+        let mut sd = ShortDescription::new();
+        let mut nationality_map = std::collections::HashMap::new();
+        nationality_map.insert("United Kingdom".to_string(), "British".to_string());
+        let mut key_map = std::collections::HashMap::new();
+        key_map.insert("nationality".to_string(), nationality_map);
+        sd.language_specific.insert("en".to_string(), key_map);
+
+        assert_eq!(sd.txt2("United Kingdom", "nationality", "en"), "British");
+    }
+
+    #[test]
+    fn test_txt2_html_link_inner_replacement() {
+        let mut sd = ShortDescription::new();
+        let mut nationality_map = std::collections::HashMap::new();
+        nationality_map.insert("United Kingdom".to_string(), "British".to_string());
+        let mut key_map = std::collections::HashMap::new();
+        key_map.insert("nationality".to_string(), nationality_map);
+        sd.language_specific.insert("en".to_string(), key_map);
+
+        let input = "<a href='https://www.wikidata.org/wiki/Q145'>United Kingdom</a>";
+        let result = sd.txt2(input, "nationality", "en");
+        assert!(result.contains("British"), "Inner text should be replaced: {result}");
+        assert!(result.contains("<a href="), "Anchor tag preserved: {result}");
+        assert!(result.contains("</a>"), "Closing tag preserved: {result}");
+    }
+
+    #[test]
+    fn test_txt2_no_match_returns_original() {
+        let sd = ShortDescription::new();
+        assert_eq!(sd.txt2("Atlantis", "nationality", "en"), "Atlantis");
+    }
+
+    #[test]
     fn test_list_words() {
         let sd = ShortDescription::new();
         let empty = WordHints::default();

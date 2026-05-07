@@ -841,6 +841,97 @@ mod tests {
     }
 
     #[test]
+    fn test_is_item_ns_zero() {
+        let raw = serde_json::json!({ "id": "Q42", "ns": 0 });
+        let item = WikiDataItem::new(raw);
+        assert!(item.is_item());
+    }
+
+    #[test]
+    fn test_is_item_ns_nonzero() {
+        let raw = serde_json::json!({ "id": "P31", "ns": 120 });
+        let item = WikiDataItem::new(raw);
+        assert!(!item.is_item());
+    }
+
+    #[test]
+    fn test_is_item_no_ns() {
+        let raw = serde_json::json!({ "id": "Q42" });
+        let item = WikiDataItem::new(raw);
+        assert!(!item.is_item());
+    }
+
+    #[test]
+    fn test_get_demonym_adjective_base_de_lowercase() {
+        let raw = serde_json::json!({
+            "claims": {
+                "P1549": [
+                    {
+                        "mainsnak": {
+                            "datavalue": {
+                                "type": "monolingualtext",
+                                "value": { "text": "Deutscher", "language": "de" }
+                            }
+                        }
+                    },
+                    {
+                        "mainsnak": {
+                            "datavalue": {
+                                "type": "monolingualtext",
+                                "value": { "text": "deutsch", "language": "de" }
+                            }
+                        }
+                    }
+                ]
+            }
+        });
+        let item = WikiDataItem::new(raw);
+        // "deutsch" starts with lowercase → adjective base
+        assert_eq!(
+            item.get_demonym_adjective_base("de"),
+            Some("deutsch".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_demonym_adjective_base_only_noun() {
+        // Only a capitalized noun, no adjective form present
+        let raw = serde_json::json!({
+            "claims": {
+                "P1549": [{
+                    "mainsnak": {
+                        "datavalue": {
+                            "type": "monolingualtext",
+                            "value": { "text": "Deutscher", "language": "de" }
+                        }
+                    }
+                }]
+            }
+        });
+        let item = WikiDataItem::new(raw);
+        assert_eq!(item.get_demonym_adjective_base("de"), None);
+    }
+
+    #[test]
+    fn test_get_demonym_adjective_base_non_de_lang() {
+        let raw = serde_json::json!({
+            "claims": {
+                "P1549": [{
+                    "mainsnak": {
+                        "datavalue": {
+                            "type": "monolingualtext",
+                            "value": { "text": "british", "language": "en" }
+                        }
+                    }
+                }]
+            }
+        });
+        let item = WikiDataItem::new(raw);
+        // Only "de" is supported; any other lang returns None
+        assert_eq!(item.get_demonym_adjective_base("en"), None);
+    }
+
+    #[test]
     fn test_get_best_quantity_exactly_one_million() {
         let claims = serde_json::json!([{
             "mainsnak": {

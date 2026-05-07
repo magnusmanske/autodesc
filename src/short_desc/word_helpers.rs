@@ -104,6 +104,254 @@ pub(super) fn wiki_urlencode(s: &str) -> String {
     urlencoding::encode(&s).to_string()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::short_desc::ShortDescription;
+
+    #[test]
+    fn test_wiki_urlencode_spaces() {
+        assert_eq!(wiki_urlencode("New York"), "New_York");
+    }
+
+    #[test]
+    fn test_wiki_urlencode_special_chars() {
+        assert_eq!(wiki_urlencode("Côte d'Ivoire"), "C%C3%B4te_d%27Ivoire");
+    }
+
+    #[test]
+    fn test_wiki_urlencode_no_change() {
+        assert_eq!(wiki_urlencode("London"), "London");
+    }
+
+    #[test]
+    fn test_uc_first_unicode() {
+        assert_eq!(uc_first("über"), "Über");
+    }
+
+    #[test]
+    fn test_uc_first_empty() {
+        assert_eq!(uc_first(""), "");
+    }
+
+    #[test]
+    fn test_split_link_wiki_no_pipe() {
+        let (full, before, inner, after) = split_link("[[London]]").unwrap();
+        assert_eq!(full, "[[London]]");
+        assert_eq!(before, "[[London|");
+        assert_eq!(inner, "London");
+        assert_eq!(after, "]]");
+    }
+
+    #[test]
+    fn test_split_link_wiki_with_pipe() {
+        let (_, before, inner, after) = split_link("[[London|capital of England]]").unwrap();
+        assert_eq!(before, "[[London|");
+        assert_eq!(inner, "capital of England");
+        assert_eq!(after, "]]");
+    }
+
+    #[test]
+    fn test_split_link_html() {
+        let (_, before, inner, after) =
+            split_link("<a href='https://example.com'>Example</a>").unwrap();
+        assert_eq!(before, "<a href='https://example.com'>");
+        assert_eq!(inner, "Example");
+        assert_eq!(after, "</a>");
+    }
+
+    #[test]
+    fn test_split_link_plain_text() {
+        assert!(split_link("plain text").is_none());
+        assert!(split_link("").is_none());
+    }
+
+    #[test]
+    fn test_clean_spaces_multiple() {
+        assert_eq!(clean_spaces("a   b"), "a b");
+    }
+
+    #[test]
+    fn test_clean_spaces_space_comma() {
+        assert_eq!(clean_spaces("a ,b"), "a,b");
+    }
+
+    #[test]
+    fn test_clean_spaces_trim() {
+        assert_eq!(clean_spaces("  hello  "), "hello");
+    }
+
+    #[test]
+    fn test_modify_word_fr_acteur() {
+        let sd = ShortDescription::new();
+        let female = WordHints { is_female: true, ..Default::default() };
+        assert_eq!(sd.modify_word("acteur", &female, "fr"), "actrice");
+        assert_eq!(sd.modify_word("Acteur", &female, "fr"), "actrice");
+    }
+
+    #[test]
+    fn test_modify_word_fr_etre_humain() {
+        let sd = ShortDescription::new();
+        let female = WordHints { is_female: true, ..Default::default() };
+        assert_eq!(sd.modify_word("être humain", &female, "fr"), "personne");
+    }
+
+    #[test]
+    fn test_modify_word_fr_male_unchanged() {
+        let sd = ShortDescription::new();
+        let male = WordHints { is_male: true, ..Default::default() };
+        assert_eq!(sd.modify_word("acteur", &male, "fr"), "acteur");
+    }
+
+    #[test]
+    fn test_modify_word_de_female_occupation() {
+        let sd = ShortDescription::new();
+        let female_occ = WordHints { is_female: true, occupation: true, ..Default::default() };
+        assert_eq!(sd.modify_word("Schauspieler", &female_occ, "de"), "Schauspielerin");
+    }
+
+    #[test]
+    fn test_modify_word_de_female_no_occupation() {
+        let sd = ShortDescription::new();
+        let female = WordHints { is_female: true, occupation: false, ..Default::default() };
+        // Without occupation flag, German doesn't transform the word
+        assert_eq!(sd.modify_word("Schauspieler", &female, "de"), "Schauspieler");
+    }
+
+    #[test]
+    fn test_modify_word_unknown_lang_unchanged() {
+        let sd = ShortDescription::new();
+        let female = WordHints { is_female: true, ..Default::default() };
+        assert_eq!(sd.modify_word("actor", &female, "zh"), "actor");
+    }
+
+    #[test]
+    fn test_list_words_empty() {
+        let sd = ShortDescription::new();
+        let hints = WordHints::default();
+        assert_eq!(sd.list_words(&[], &hints, "en"), "");
+    }
+
+    #[test]
+    fn test_list_words_single() {
+        let sd = ShortDescription::new();
+        let hints = WordHints::default();
+        assert_eq!(sd.list_words(&["one".to_string()], &hints, "en"), "one");
+    }
+
+    #[test]
+    fn test_list_words_en_two() {
+        let sd = ShortDescription::new();
+        let hints = WordHints::default();
+        assert_eq!(
+            sd.list_words(&["a".to_string(), "b".to_string()], &hints, "en"),
+            "a and b"
+        );
+    }
+
+    #[test]
+    fn test_list_words_en_three_oxford_comma() {
+        let sd = ShortDescription::new();
+        let hints = WordHints::default();
+        assert_eq!(
+            sd.list_words(
+                &["a".to_string(), "b".to_string(), "c".to_string()],
+                &hints,
+                "en"
+            ),
+            "a, b, and c"
+        );
+    }
+
+    #[test]
+    fn test_list_words_de() {
+        let sd = ShortDescription::new();
+        let hints = WordHints::default();
+        assert_eq!(
+            sd.list_words(&["a".to_string(), "b".to_string(), "c".to_string()], &hints, "de"),
+            "a, b und c"
+        );
+    }
+
+    #[test]
+    fn test_list_words_fr() {
+        let sd = ShortDescription::new();
+        let hints = WordHints::default();
+        assert_eq!(
+            sd.list_words(&["a".to_string(), "b".to_string()], &hints, "fr"),
+            "a et b"
+        );
+    }
+
+    #[test]
+    fn test_list_words_nl() {
+        let sd = ShortDescription::new();
+        let hints = WordHints::default();
+        assert_eq!(
+            sd.list_words(&["a".to_string(), "b".to_string()], &hints, "nl"),
+            "a en b"
+        );
+    }
+
+    #[test]
+    fn test_list_words_pl() {
+        let sd = ShortDescription::new();
+        let hints = WordHints::default();
+        assert_eq!(
+            sd.list_words(&["a".to_string(), "b".to_string()], &hints, "pl"),
+            "a i b"
+        );
+    }
+
+    #[test]
+    fn test_list_words_vi_oxford_comma() {
+        let sd = ShortDescription::new();
+        let hints = WordHints::default();
+        assert_eq!(
+            sd.list_words(
+                &["a".to_string(), "b".to_string(), "c".to_string()],
+                &hints,
+                "vi"
+            ),
+            "a, b, và c"
+        );
+    }
+
+    #[test]
+    fn test_list_words_es() {
+        let sd = ShortDescription::new();
+        let hints = WordHints::default();
+        assert_eq!(
+            sd.list_words(&["a".to_string(), "b".to_string()], &hints, "es"),
+            "a y b"
+        );
+    }
+
+    #[test]
+    fn test_list_words_unknown_lang_comma_separated() {
+        let sd = ShortDescription::new();
+        let hints = WordHints::default();
+        assert_eq!(
+            sd.list_words(&["a".to_string(), "b".to_string(), "c".to_string()], &hints, "zh"),
+            "a, b, c"
+        );
+    }
+
+    #[test]
+    fn test_modify_word_en_actor_actress_female() {
+        let sd = ShortDescription::new();
+        let female = WordHints { is_female: true, ..Default::default() };
+        assert_eq!(sd.modify_word("actor / actress", &female, "en"), "actress");
+    }
+
+    #[test]
+    fn test_modify_word_en_actor_actress_male() {
+        let sd = ShortDescription::new();
+        let male = WordHints { is_male: true, ..Default::default() };
+        assert_eq!(sd.modify_word("actor / actress", &male, "en"), "actor");
+    }
+}
+
 impl ShortDescription {
     /// Apply language-specific word modification (e.g. nationality transformation).
     pub fn txt2(&self, text: &str, key: &str, lang: &str) -> String {
