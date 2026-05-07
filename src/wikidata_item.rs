@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use serde_json::Value;
 
@@ -26,21 +27,28 @@ pub fn sanitize_q(q: &str) -> String {
 }
 
 /// Represents a single Wikidata entity with helper methods for extracting data.
+///
+/// `raw` is wrapped in `Arc` so that cloning a `WikiDataItem` (e.g. between the
+/// shared moka cache and a per-request `WikiData.items` map) is a cheap refcount
+/// bump rather than a deep clone of the underlying JSON.
 #[derive(Debug, Clone)]
 pub struct WikiDataItem {
-    pub raw: Value,
+    pub raw: Arc<Value>,
     placeholder: bool,
 }
 
 impl WikiDataItem {
     pub fn new(raw: Value) -> Self {
         let placeholder = raw.is_null();
-        Self { raw, placeholder }
+        Self {
+            raw: Arc::new(raw),
+            placeholder,
+        }
     }
 
     pub fn placeholder() -> Self {
         Self {
-            raw: Value::Null,
+            raw: Arc::new(Value::Null),
             placeholder: true,
         }
     }
