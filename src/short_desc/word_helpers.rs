@@ -392,20 +392,16 @@ impl ShortDescription {
                     return "actor".to_string();
                 }
             }
-            "fr" => {
-                if hints.is_female {
-                    if lower == "acteur" {
-                        return "actrice".to_string();
-                    }
-                    if lower == "être humain" {
-                        return "personne".to_string();
-                    }
+            "fr" if hints.is_female => {
+                if lower == "acteur" {
+                    return "actrice".to_string();
+                }
+                if lower == "être humain" {
+                    return "personne".to_string();
                 }
             }
-            "de" => {
-                if hints.is_female && hints.occupation {
-                    return format!("{}in", word);
-                }
+            "de" if hints.is_female && hints.occupation => {
+                return format!("{}in", word);
             }
             _ => {}
         }

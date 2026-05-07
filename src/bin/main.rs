@@ -414,16 +414,15 @@ fn first_thumbnail(response: &ApiResponse) -> Option<(String, String)> {
     ] {
         if let Some(files) = media.get(*media_type).and_then(|v| v.as_array()) {
             for file in files {
-                if let Some(filename) = file.as_str() {
-                    if let Some(info) = thumbnails.get(filename) {
-                        if let Some(thumburl) = info.get("thumburl").and_then(|v| v.as_str()) {
-                            let descurl = info
-                                .get("descriptionurl")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or(thumburl);
-                            return Some((thumburl.to_string(), descurl.to_string()));
-                        }
-                    }
+                if let Some(filename) = file.as_str()
+                    && let Some(info) = thumbnails.get(filename)
+                    && let Some(thumburl) = info.get("thumburl").and_then(|v| v.as_str())
+                {
+                    let descurl = info
+                        .get("descriptionurl")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(thumburl);
+                    return Some((thumburl.to_string(), descurl.to_string()));
                 }
             }
         }

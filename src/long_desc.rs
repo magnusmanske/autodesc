@@ -190,7 +190,7 @@ impl LongDescGenerator {
         }
 
         // Only persons get long descriptions
-        if !ShortDescription::is_person_public(claims) {
+        if !ShortDescription::is_person(claims) {
             return None;
         }
 
@@ -210,10 +210,10 @@ impl LongDescGenerator {
     }
 
     fn get_items_to_load(claims: &Value, opt: &DescOptions) -> (LongDescState, Vec<String>) {
-        let is_male = ShortDescription::has_pq_public(claims, 21, 6581097)
-            || ShortDescription::has_pq_public(claims, 21, 2449503);
-        let is_female = ShortDescription::has_pq_public(claims, 21, 6581072)
-            || ShortDescription::has_pq_public(claims, 21, 1052281);
+        let is_male = ShortDescription::has_pq(claims, 21, 6581097)
+            || ShortDescription::has_pq(claims, 21, 2449503);
+        let is_female = ShortDescription::has_pq(claims, 21, 6581072)
+            || ShortDescription::has_pq(claims, 21, 1052281);
         let is_dead = has_claims(claims, "P570");
 
         let newline = match opt.links.as_str() {

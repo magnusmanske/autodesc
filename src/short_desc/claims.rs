@@ -3,7 +3,7 @@ use super::ShortDescription;
 impl ShortDescription {
     /// Check if claims have a specific P/Q link (both numeric).
     /// Handles both the newer `"id": "Q<n>"` format and the older `"numeric-id": <n>` format.
-    pub(super) fn has_pq(claims: &serde_json::Value, p: u64, q: u64) -> bool {
+    pub fn has_pq(claims: &serde_json::Value, p: u64, q: u64) -> bool {
         let prop = format!("P{}", p);
         let claims_arr = match claims.get(&prop).and_then(|v| v.as_array()) {
             Some(arr) => arr,
@@ -43,7 +43,7 @@ impl ShortDescription {
         false
     }
 
-    pub(super) fn is_person(claims: &serde_json::Value) -> bool {
+    pub fn is_person(claims: &serde_json::Value) -> bool {
         Self::has_pq(claims, 107, 215627) || Self::has_pq(claims, 31, 5)
     }
 
@@ -56,16 +56,6 @@ impl ShortDescription {
 
     pub(super) fn is_disambig(claims: &serde_json::Value) -> bool {
         Self::has_pq(claims, 107, 11651459)
-    }
-
-    /// Public version of `has_pq` for use by other modules (e.g. long_desc).
-    pub fn has_pq_public(claims: &serde_json::Value, p: u64, q: u64) -> bool {
-        Self::has_pq(claims, p, q)
-    }
-
-    /// Public version of `is_person` for use by other modules (e.g. long_desc).
-    pub fn is_person_public(claims: &serde_json::Value) -> bool {
-        Self::is_person(claims)
     }
 
     /// Extract items from claims for a given (numeric) property. Returns [(prop_num, qid), ...].

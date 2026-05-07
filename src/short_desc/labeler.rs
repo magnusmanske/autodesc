@@ -199,6 +199,24 @@ impl ShortDescription {
         }
     }
 
+    /// Build a map from label → Q-id for items of a given property, filtering out items
+    /// whose label is the same as their Q-id (i.e. unlabelled items).
+    pub(super) fn build_label_to_qid_map(
+        load_items: &[(u64, String)],
+        prop: u64,
+        lang: &str,
+        wd: &WikiData,
+    ) -> std::collections::HashMap<String, String> {
+        load_items
+            .iter()
+            .filter(|(p, _)| *p == prop)
+            .filter_map(|(_, q)| {
+                let label = wd.get_item(q)?.get_label(Some(lang));
+                if label == *q { None } else { Some((label, q.clone())) }
+            })
+            .collect()
+    }
+
     /// Return the demonym for `country_label` in `lang`.
     /// Tries P1549 on the Wikidata country item first; falls back to the
     /// hardcoded nationality table (`txt2`).
