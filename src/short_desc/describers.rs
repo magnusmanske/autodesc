@@ -5,8 +5,8 @@ use regex::Regex;
 use crate::desc_options::DescOptions;
 use crate::wikidata::{WikiData, WikiDataItem};
 
-use super::word_helpers::{clean_spaces, split_link, uc_first, Add2DescArgs, WordHints};
 use super::ShortDescription;
+use super::word_helpers::{Add2DescArgs, WordHints, clean_spaces, split_link, uc_first};
 
 fn entity_url_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -122,9 +122,9 @@ impl ShortDescription {
                         && let Some(gendered) = wd
                             .get_item(q)
                             .and_then(|i| i.get_gendered_label(lang, is_female))
-                        {
-                            *label = format!("{}{}{}", before, gendered, after);
-                        }
+                    {
+                        *label = format!("{}{}{}", before, gendered, after);
+                    }
                 }
             }
         }
@@ -346,9 +346,10 @@ impl ShortDescription {
             }
 
             if let Some(rank_id) = taxon_rank_index(&taxon_rank)
-                && rank_id < taxa_cache.len() {
-                    taxa_cache[rank_id] = Some(binding.clone());
-                }
+                && rank_id < taxa_cache.len()
+            {
+                taxa_cache[rank_id] = Some(binding.clone());
+            }
         }
 
         for binding in taxa_cache.iter().flatten() {

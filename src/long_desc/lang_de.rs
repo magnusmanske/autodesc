@@ -106,7 +106,10 @@ impl LangGenerator for LangDe {
             let suffix = if state.is_male { "er" } else { "e" };
             let nationality = de_adj_base_for_country(country_q)
                 .map(|s| s.to_string())
-                .or_else(|| wd.get_item(country_q).and_then(|i| i.get_demonym_adjective_base("de")))
+                .or_else(|| {
+                    wd.get_item(country_q)
+                        .and_then(|i| i.get_demonym_adjective_base("de"))
+                })
                 .map(|base| format!("{}{}", base, suffix))
                 .unwrap_or_else(|| {
                     sd.get_nationality_from_country(

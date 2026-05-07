@@ -108,22 +108,23 @@ impl ShortDescription {
     /// Apply language-specific word modification (e.g. nationality transformation).
     pub fn txt2(&self, text: &str, key: &str, lang: &str) -> String {
         if let Some(lang_spec) = self.language_specific.get(lang)
-            && let Some(key_map) = lang_spec.get(key) {
-                let link_re = html_link_re();
-                if let Some(caps) = link_re.captures(text) {
-                    let inner = caps.get(2).unwrap().as_str();
-                    if let Some(replacement) = key_map.get(inner) {
-                        return format!(
-                            "{}{}{}",
-                            caps.get(1).unwrap().as_str(),
-                            replacement,
-                            caps.get(3).unwrap().as_str()
-                        );
-                    }
-                } else if let Some(replacement) = key_map.get(text) {
-                    return replacement.clone();
+            && let Some(key_map) = lang_spec.get(key)
+        {
+            let link_re = html_link_re();
+            if let Some(caps) = link_re.captures(text) {
+                let inner = caps.get(2).unwrap().as_str();
+                if let Some(replacement) = key_map.get(inner) {
+                    return format!(
+                        "{}{}{}",
+                        caps.get(1).unwrap().as_str(),
+                        replacement,
+                        caps.get(3).unwrap().as_str()
+                    );
                 }
+            } else if let Some(replacement) = key_map.get(text) {
+                return replacement.clone();
             }
+        }
         text.to_string()
     }
 

@@ -79,11 +79,11 @@ impl LangGenerator for LangFr {
                 && let Some(gendered) = wd
                     .get_item(occ_q)
                     .and_then(|i| i.get_gendered_label(&state.lang, state.is_female))
-                {
-                    state.push_text(&gendered);
-                    state.push_text(sep);
-                    continue;
-                }
+            {
+                state.push_text(&gendered);
+                state.push_text(sep);
+                continue;
+            }
             state.push_item(occ_q, "", sep);
         }
 
@@ -132,10 +132,18 @@ impl LangGenerator for LangFr {
         if floruit.is_some() || work_start.is_some() || work_end.is_some() {
             let subj = state.pronoun_subject(&CFG);
             let active_adj = if state.is_female { "active" } else { "actif" };
-            let bare_year =
-                |d: &WdDate| parse_time(&d.time).map(|(_, y, _, _)| y.to_string()).unwrap_or_default();
+            let bare_year = |d: &WdDate| {
+                parse_time(&d.time)
+                    .map(|(_, y, _, _)| y.to_string())
+                    .unwrap_or_default()
+            };
             if let Some(ref date) = floruit {
-                state.push_text(&format!("{} était {} vers {}",subj, active_adj, bare_year(date)));
+                state.push_text(&format!(
+                    "{} était {} vers {}",
+                    subj,
+                    active_adj,
+                    bare_year(date)
+                ));
             } else if let (Some(from), Some(to)) = (work_start.as_ref(), work_end.as_ref()) {
                 state.push_text(&format!(
                     "{} était {} de {} à {}",
@@ -193,10 +201,11 @@ impl LangGenerator for LangFr {
         }
 
         if let Some(claim) = birthdate
-            && let Some(date) = extract_claim_date(claim) {
-                state.push_text(&self.render_date(&date, false));
-                state.push_text(" ");
-            }
+            && let Some(date) = extract_claim_date(claim)
+        {
+            state.push_text(&self.render_date(&date, false));
+            state.push_text(" ");
+        }
 
         if let Some(ref place_q) = birthplace {
             state.push_item(place_q, "à ", " ");
@@ -264,9 +273,10 @@ impl LangGenerator for LangFr {
                 state.push_item(&item.q, "", " ");
                 self.push_date_range(state, item);
                 if let Some(of_items) = item.qualifier_items.get("P642")
-                    && let Some(of_q) = of_items.first() {
-                        state.push_item(of_q, "pour ", " ");
-                    }
+                    && let Some(of_q) = of_items.first()
+                {
+                    state.push_item(of_q, "pour ", " ");
+                }
                 state.push_text(get_sep_after_fr(positions.len(), k));
             }
             state.push_text(". ");
@@ -293,9 +303,10 @@ impl LangGenerator for LangFr {
                 state.push_item(&item.q, "", " ");
                 self.push_date_range(state, item);
                 if let Some(job_items) = item.qualifier_items.get("P794")
-                    && let Some(job_q) = job_items.first() {
-                        state.push_item(job_q, "en tant que ", " ");
-                    }
+                    && let Some(job_q) = job_items.first()
+                {
+                    state.push_item(job_q, "en tant que ", " ");
+                }
                 let sep = get_sep_after_fr(employers.len(), k);
                 if k + 1 < employers.len() {
                     state.push_text(&format!("{}pour ", sep));
@@ -394,10 +405,11 @@ impl LangGenerator for LangFr {
             }
 
             if let Some(claim) = deathdate
-                && let Some(date) = extract_claim_date(claim) {
-                    state.push_text(&self.render_date(&date, false));
-                    state.push_text(" ");
-                }
+                && let Some(date) = extract_claim_date(claim)
+            {
+                state.push_text(&self.render_date(&date, false));
+                state.push_text(" ");
+            }
 
             if let Some(ref place_q) = deathplace {
                 state.push_item(place_q, "à ", " ");

@@ -433,9 +433,10 @@ pub(super) fn add_claim_items(claims: &Value, prop: &str, items: &mut Vec<String
     };
     for claim in arr {
         if let Some(q) = WikiDataItem::get_claim_target_item_id(claim)
-            && !items.contains(&q) {
-                items.push(q);
-            }
+            && !items.contains(&q)
+        {
+            items.push(q);
+        }
     }
 }
 
@@ -447,31 +448,32 @@ fn add_qualifier_items(claims: &Value, prop: &str, qual_prop: &str, items: &mut 
     };
     for claim in arr {
         if let Some(qualifiers) = claim.get("qualifiers")
-            && let Some(qual_arr) = qualifiers.get(qual_prop).and_then(|v| v.as_array()) {
-                for qual in qual_arr {
-                    if let Some(q) = qual
-                        .get("datavalue")
-                        .and_then(|dv| dv.get("value"))
-                        .and_then(|v| v.get("id"))
-                        .and_then(|id| id.as_str())
-                    {
-                        let q = q.to_string();
-                        if !items.contains(&q) {
-                            items.push(q);
-                        }
-                    } else if let Some(nid) = qual
-                        .get("datavalue")
-                        .and_then(|dv| dv.get("value"))
-                        .and_then(|v| v.get("numeric-id"))
-                        .and_then(|n| n.as_u64())
-                    {
-                        let q = format!("Q{}", nid);
-                        if !items.contains(&q) {
-                            items.push(q);
-                        }
+            && let Some(qual_arr) = qualifiers.get(qual_prop).and_then(|v| v.as_array())
+        {
+            for qual in qual_arr {
+                if let Some(q) = qual
+                    .get("datavalue")
+                    .and_then(|dv| dv.get("value"))
+                    .and_then(|v| v.get("id"))
+                    .and_then(|id| id.as_str())
+                {
+                    let q = q.to_string();
+                    if !items.contains(&q) {
+                        items.push(q);
+                    }
+                } else if let Some(nid) = qual
+                    .get("datavalue")
+                    .and_then(|dv| dv.get("value"))
+                    .and_then(|v| v.get("numeric-id"))
+                    .and_then(|n| n.as_u64())
+                {
+                    let q = format!("Q{}", nid);
+                    if !items.contains(&q) {
+                        items.push(q);
                     }
                 }
             }
+        }
     }
 }
 

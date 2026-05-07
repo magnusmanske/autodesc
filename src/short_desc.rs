@@ -1,8 +1,9 @@
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use crate::desc_options::DescOptions;
 use crate::long_desc;
-use crate::wikidata::{sanitize_q, WikiData};
+use crate::wikidata::{WikiData, sanitize_q};
 
 mod claims;
 mod describers;
@@ -26,6 +27,12 @@ impl ShortDescription {
             stock,
             language_specific: HashMap::new(),
         }
+    }
+
+    /// Return the process-wide singleton, parsing stock.json only once.
+    pub fn global() -> &'static Self {
+        static INSTANCE: OnceLock<ShortDescription> = OnceLock::new();
+        INSTANCE.get_or_init(Self::new)
     }
 
     /// Get a translated string from the stock translations.
@@ -59,34 +66,32 @@ impl ShortDescription {
             );
         }
 
-        let claims = wd
-            .get_item(&q)
-            .map(|item| {
-                item.raw
-                    .get("claims")
-                    .cloned()
-                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new()))
-            })
-            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+        // Clone the Arc (cheap refcount bump) instead of deep-cloning the claims JSON.
+        let item_raw = wd.get_item(&q).map(|item| item.raw.clone());
+        let empty_obj = serde_json::Value::Object(serde_json::Map::new());
+        let claims: &serde_json::Value = item_raw
+            .as_deref()
+            .and_then(|raw| raw.get("claims"))
+            .unwrap_or(&empty_obj);
 
         // Try long description if mode=long
         if opt.mode == "long"
             && let Some(long_result) =
-                long_desc::LongDescGenerator::generate(self, &q, &claims, opt, wd).await
-            {
-                return (q, long_result);
-            }
-            // Fall through to short description if long is not available
+                long_desc::LongDescGenerator::generate(self, &q, claims, opt, wd).await
+        {
+            return (q, long_result);
+        }
+        // Fall through to short description if long is not available
 
-        if Self::is_person(&claims) {
-            self.describe_person(&q, &claims, opt, wd).await
-        } else if Self::is_taxon(&claims) {
-            self.describe_taxon(&q, &claims, opt, wd).await
-        } else if Self::is_disambig(&claims) {
+        if Self::is_person(claims) {
+            self.describe_person(&q, claims, opt, wd).await
+        } else if Self::is_taxon(claims) {
+            self.describe_taxon(&q, claims, opt, wd).await
+        } else if Self::is_disambig(claims) {
             let desc = self.txt("disambig", &opt.lang);
             (q, desc)
         } else {
-            self.describe_generic(&q, &claims, opt, wd).await
+            self.describe_generic(&q, claims, opt, wd).await
         }
     }
 }

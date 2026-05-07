@@ -10,6 +10,16 @@ use tokio::sync::Semaphore;
 
 pub use crate::wikidata_item::{MAIN_LANGUAGES, WikiDataItem, sanitize_q, unified_id};
 
+fn global_client() -> &'static Client {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        Client::builder()
+            .user_agent("autodesc/0.2.0 (https://github.com/magnusmanske/autodesc; magnusmanske@googlemail.com) reqwest")
+            .build()
+            .expect("Failed to build HTTP client")
+    })
+}
+
 fn year_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"^([+-])0*(\d+)").expect("year regex is valid"))
@@ -44,13 +54,9 @@ impl WikiData {
     }
 
     pub fn with_api_url(api_url: &str) -> Self {
-        let client = Client::builder()
-            .user_agent("autodesc/0.2.0 (https://github.com/magnusmanske/autodesc; magnusmanske@googlemail.com) reqwest")
-            .build()
-            .expect("Failed to build HTTP client");
         Self {
             items: HashMap::new(),
-            client,
+            client: global_client().clone(),
             api_url: api_url.to_string(),
             max_get_entities: 50,
             item_cache: None,

@@ -135,8 +135,7 @@ impl WikiDataItem {
     /// Both are monolingualtext properties.
     pub fn get_gendered_label(&self, lang: &str, is_female: bool) -> Option<String> {
         let prop = if is_female { "P2521" } else { "P3321" };
-        let claims = self.get_claims_for_property(prop);
-        for claim in &claims {
+        for claim in self.claims_slice(prop) {
             if let Some(value) = claim
                 .get("mainsnak")
                 .and_then(|s| s.get("datavalue"))
@@ -145,9 +144,10 @@ impl WikiDataItem {
                 let claim_lang = value.get("language").and_then(|l| l.as_str());
                 let text = value.get("text").and_then(|t| t.as_str());
                 if let (Some(cl), Some(t)) = (claim_lang, text)
-                    && cl == lang {
-                        return Some(t.to_string());
-                    }
+                    && cl == lang
+                {
+                    return Some(t.to_string());
+                }
             }
         }
         None
@@ -161,8 +161,7 @@ impl WikiDataItem {
             return None;
         }
 
-        let claims = self.get_claims_for_property("P1549");
-        for claim in &claims {
+        for claim in self.claims_slice("P1549") {
             let v = claim
                 .get("mainsnak")
                 .and_then(|s| s.get("datavalue"))
@@ -170,10 +169,10 @@ impl WikiDataItem {
             if v.get("language").and_then(|l| l.as_str()) != Some("de") {
                 continue;
             }
-            if let Some(t) = v.get("text").and_then(|t| t.as_str()) {
-                if t.chars().next().map_or(false, |c| c.is_lowercase()) {
-                    return Some(t.to_string());
-                }
+            if let Some(t) = v.get("text").and_then(|t| t.as_str())
+                && t.chars().next().is_some_and(|c| c.is_lowercase())
+            {
+                return Some(t.to_string());
             }
         }
         None
@@ -182,8 +181,7 @@ impl WikiDataItem {
     /// Get the demonym (P1549) for this item in the given language.
     /// P1549 values are monolingualtext, so we look for the one matching `lang`.
     pub fn get_demonym(&self, lang: &str) -> Option<String> {
-        let claims = self.get_claims_for_property("P1549");
-        for claim in &claims {
+        for claim in self.claims_slice("P1549") {
             if let Some(value) = claim
                 .get("mainsnak")
                 .and_then(|s| s.get("datavalue"))
@@ -192,9 +190,10 @@ impl WikiDataItem {
                 let claim_lang = value.get("language").and_then(|l| l.as_str());
                 let text = value.get("text").and_then(|t| t.as_str());
                 if let (Some(cl), Some(t)) = (claim_lang, text)
-                    && cl == lang {
-                        return Some(t.to_string());
-                    }
+                    && cl == lang
+                {
+                    return Some(t.to_string());
+                }
             }
         }
         None
@@ -227,18 +226,25 @@ impl WikiDataItem {
         String::new()
     }
 
-    pub fn get_claims_for_property(&self, p: &str) -> Vec<Value> {
-        let p = unified_id(p);
+    /// Return claims for a property as a slice without any allocation.
+    /// The `prop` argument must already be normalized (uppercase, no whitespace).
+    pub(crate) fn claims_slice(&self, prop: &str) -> &[Value] {
         self.raw
             .get("claims")
-            .and_then(|c| c.get(&p))
+            .and_then(|c| c.get(prop))
             .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default()
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    pub fn get_claims_for_property(&self, p: &str) -> Vec<Value> {
+        let p = unified_id(p);
+        self.claims_slice(&p).to_vec()
     }
 
     pub fn has_claims(&self, p: &str) -> bool {
-        !self.get_claims_for_property(p).is_empty()
+        let p = unified_id(p);
+        !self.claims_slice(&p).is_empty()
     }
 
     /// Extract the target item Q-id from a claim's mainsnak.
@@ -279,22 +285,25 @@ impl WikiDataItem {
     }
 
     pub fn has_claim_item_link(&self, p: &str, q: &str) -> bool {
+        let p = unified_id(p);
         let q = unified_id(q);
-        self.get_claims_for_property(p)
+        self.claims_slice(&p)
             .iter()
             .filter_map(Self::get_claim_target_item_id)
             .any(|id| id == q)
     }
 
     pub fn get_claim_items_for_property(&self, p: &str) -> Vec<String> {
-        self.get_claims_for_property(p)
+        let p = unified_id(p);
+        self.claims_slice(&p)
             .iter()
             .filter_map(Self::get_claim_target_item_id)
             .collect()
     }
 
     pub fn get_strings_for_property(&self, p: &str) -> Vec<String> {
-        self.get_claims_for_property(p)
+        let p = unified_id(p);
+        self.claims_slice(&p)
             .iter()
             .filter_map(Self::get_claim_target_string)
             .collect()
@@ -331,9 +340,9 @@ impl WikiDataItem {
                 .and_then(|ls| ls.get(lang))
                 .and_then(|l| l.get("value"))
                 .and_then(|v| v.as_str())
-            {
-                aliases.insert(label.to_string(), true);
-            }
+        {
+            aliases.insert(label.to_string(), true);
+        }
 
         aliases.into_keys().collect()
     }
@@ -680,8 +689,14 @@ mod tests {
             }
         });
         let item = WikiDataItem::new(raw);
-        assert_eq!(item.get_gendered_label("es", true), Some("escritora".to_string()));
-        assert_eq!(item.get_gendered_label("es", false), Some("escritor".to_string()));
+        assert_eq!(
+            item.get_gendered_label("es", true),
+            Some("escritora".to_string())
+        );
+        assert_eq!(
+            item.get_gendered_label("es", false),
+            Some("escritor".to_string())
+        );
         assert_eq!(item.get_gendered_label("fr", true), None);
     }
 

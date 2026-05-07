@@ -3,7 +3,7 @@ use autodesc::long_desc::LongDescGenerator;
 use autodesc::short_desc::ShortDescription;
 use autodesc::wikidata::WikiData;
 use autodesc::wikidata_item::WikiDataItem;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 

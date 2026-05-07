@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use crate::desc_options::DescOptions;
 use crate::wikidata::WikiData;
 
-use super::word_helpers::{wiki_urlencode, Add2DescArgs};
 use super::ShortDescription;
+use super::word_helpers::{Add2DescArgs, wiki_urlencode};
 
 impl ShortDescription {
     /// Create labeled links for a set of items. Returns a map from property number to list of labels/links.
@@ -172,7 +172,7 @@ impl ShortDescription {
         let mut h2: Vec<String> = Vec::new();
         for prop in args.props {
             if let Some(labels) = item_labels.get(prop) {
-                h2.extend(labels.clone());
+                h2.extend(labels.iter().cloned());
             }
         }
 
@@ -181,10 +181,11 @@ impl ShortDescription {
         }
 
         if let Some(pfx) = args.prefix
-            && !h.is_empty() {
-                let last = h.len() - 1;
-                h[last].push_str(pfx);
-            }
+            && !h.is_empty()
+        {
+            let last = h.len() - 1;
+            h[last].push_str(pfx);
+        }
 
         let s = self.list_words(&h2, args.hints, lang);
         if let Some(key) = args.txt_key {
@@ -209,9 +210,10 @@ impl ShortDescription {
         wd: &WikiData,
     ) -> String {
         if let Some(q) = country_q
-            && let Some(demonym) = wd.get_item(q).and_then(|item| item.get_demonym(lang)) {
-                return demonym;
-            }
+            && let Some(demonym) = wd.get_item(q).and_then(|item| item.get_demonym(lang))
+        {
+            return demonym;
+        }
         self.txt2(country_label, "nationality", lang)
     }
 }

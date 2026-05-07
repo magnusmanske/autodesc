@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::time::Duration;
 
 use axum::{
@@ -258,7 +257,7 @@ async fn api_handler(State(state): State<AppState>, Query(params): Query<ApiPara
 
     // Create a WikiData client backed by the shared item cache.
     let mut wd = WikiData::new().with_item_cache(state.item_cache.clone());
-    let sd = ShortDescription::new();
+    let sd = ShortDescription::global();
 
     // Generate description
     let (_result_q, output) = sd.load_item(&q, &mut opt, &mut wd).await;
@@ -324,14 +323,10 @@ async fn add_media(args: &ApiParams, q: &str, mut wd: WikiData, response: &mut A
         let media_result =
             MediaGenerator::generate_media(q, &args.thumb, args.user_zoom, &mut wd).await;
 
-        // Build media JSON (without thumbnails)
-        let mut media_json: HashMap<String, Value> = HashMap::new();
-        for (key, val) in &media_result.media {
-            media_json.insert(key.clone(), val.clone());
+        if !media_result.media.is_empty() {
+            response.media = Some(serde_json::to_value(&media_result.media).unwrap_or_default());
         }
-        response.media = Some(serde_json::to_value(&media_json).unwrap_or_default());
 
-        // Build thumbnails JSON
         if !media_result.thumbnails.is_empty() {
             response.thumbnails =
                 Some(serde_json::to_value(&media_result.thumbnails).unwrap_or_default());
@@ -407,7 +402,16 @@ fn first_thumbnail(response: &ApiResponse) -> Option<(String, String)> {
     let thumbnails = response.thumbnails.as_ref()?.as_object()?;
     let media = response.media.as_ref()?.as_object()?;
 
-    for media_type in &["image", "coat_of_arms", "logo", "flag", "seal", "banner", "map", "osm"] {
+    for media_type in &[
+        "image",
+        "coat_of_arms",
+        "logo",
+        "flag",
+        "seal",
+        "banner",
+        "map",
+        "osm",
+    ] {
         if let Some(files) = media.get(*media_type).and_then(|v| v.as_array()) {
             for file in files {
                 if let Some(filename) = file.as_str() {
