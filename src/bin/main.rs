@@ -11,7 +11,7 @@ use axum::{
     Router,
     error_handling::HandleErrorLayer,
     extract::{ConnectInfo, Query, State},
-    http::{HeaderValue, Method, StatusCode, header},
+    http::{HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Json, Response},
     routing::get,
 };
@@ -755,14 +755,7 @@ async fn main() {
 }
 
 fn build_cors_layer() -> CorsLayer {
-    CorsLayer::new()
-        .allow_methods([Method::GET])
-        .allow_headers([header::ACCEPT, header::ACCEPT_LANGUAGE])
-        .allow_origin([
-            HeaderValue::from_static("https://autodesc.toolforge.org"),
-            HeaderValue::from_static("https://www.wikidata.org"),
-            HeaderValue::from_static("https://wikidata.org"),
-        ])
+    CorsLayer::permissive()
 }
 
 async fn shutdown_signal() {
