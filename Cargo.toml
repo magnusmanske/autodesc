@@ -14,6 +14,8 @@ name = "autodesc"
 path = "src/lib.rs"
 
 [dependencies]
+mimalloc = { version = "0.1", features = ["secure"] }
+
 # Web framework
 axum = { version = "0.7", features = ["query"] }
 tokio = { version = "1", features = ["full"] }

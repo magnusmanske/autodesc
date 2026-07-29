@@ -1,5 +1,7 @@
-use std::time::Duration;
-
+use autodesc::desc_options::DescOptions;
+use autodesc::media::MediaGenerator;
+use autodesc::short_desc::ShortDescription;
+use autodesc::wikidata::{WikiData, WikiDataItem, sanitize_q};
 use axum::{
     Router,
     error_handling::HandleErrorLayer,
@@ -11,6 +13,7 @@ use axum::{
 use moka::future::Cache;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::time::Duration;
 use tower::BoxError;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
@@ -18,10 +21,8 @@ use tower_http::cors::CorsLayer;
 use tower_http::set_header::response::SetResponseHeaderLayer;
 use tower_http::timeout::TimeoutLayer;
 
-use autodesc::desc_options::DescOptions;
-use autodesc::media::MediaGenerator;
-use autodesc::short_desc::ShortDescription;
-use autodesc::wikidata::{WikiData, WikiDataItem, sanitize_q};
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// Shared application state holding both global caches.
 #[derive(Clone)]
