@@ -3,6 +3,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 
 use crate::desc_options::DescOptions;
+use crate::qid::QId;
 use crate::wikidata::{WikiData, WikiDataItem};
 
 use super::ShortDescription;
@@ -59,7 +60,7 @@ impl ShortDescription {
         let is_male = Self::has_pq(claims, 21, 6581097);
         let is_female = Self::has_pq(claims, 21, 6581072);
 
-        let lang = &opt.lang;
+        let lang = opt.lang.as_str();
         let mut h: Vec<String> = Vec::new();
 
         let p27_label_to_qid = Self::build_label_to_qid_map(&load_items, 27, lang, wd);
@@ -96,7 +97,7 @@ impl ShortDescription {
                         .unwrap_or_else(|| (String::new(), label.to_string(), String::new()));
                     if let Some(q) = p106_label_to_qid.get(&inner)
                         && let Some(gendered) = wd
-                            .get_item(q)
+                            .get_item(&QId::parse(q).unwrap())
                             .and_then(|i| i.get_gendered_label(lang, is_female))
                     {
                         *label = format!("{}{}{}", before, gendered, after);
@@ -368,7 +369,7 @@ impl ShortDescription {
             h_parts[0] = format!(
                 "{} {} {}",
                 h_parts[0],
-                self.txt("of", &opt.lang),
+                self.txt("of", opt.lang.as_str()),
                 labels_0[1]
             );
         }
@@ -437,7 +438,7 @@ impl ShortDescription {
         Self::add_items_from_claims(claims, 1082, &mut load_items); // Population
 
         let item_labels = self.label_items(&load_items, opt, wd).await;
-        let lang = &opt.lang;
+        let lang = opt.lang.as_str();
         let empty_hints = WordHints::default();
         let mut h: Vec<String> = Vec::new();
 
@@ -489,10 +490,8 @@ impl ShortDescription {
             .cloned()
             .unwrap_or_default();
         if let Some(best) = WikiDataItem::get_best_quantity(&pop_claims) {
-            let pop_label = wd
-                .get_item("P1082")
-                .map(|i| i.get_label(Some(lang)))
-                .unwrap_or_else(|| "population".to_string());
+            // P1082 is a property ID, not a Q-id, so it can't be looked up via get_item.
+            let pop_label = "population".to_string();
             h.push(format!(", {} {}", pop_label, best));
         }
 

@@ -1,3 +1,5 @@
+use autodesc::Lang;
+use autodesc::QId;
 use autodesc::desc_options::DescOptions;
 use autodesc::long_desc::LongDescGenerator;
 use autodesc::short_desc::ShortDescription;
@@ -109,12 +111,15 @@ fn claims_non_person() -> Value {
 
 /// Pre-insert a fake item for the given Q-id into `wd`.
 fn insert_item(wd: &mut WikiData, id: &str, label_en: &str) {
-    wd.items
-        .insert(id.to_string(), WikiDataItem::new(fake_item(id, label_en)));
+    wd.items.insert(
+        QId::parse(id).unwrap(),
+        WikiDataItem::new(fake_item(id, label_en)),
+    );
 }
 
 fn insert_item_json(wd: &mut WikiData, id: &str, raw: Value) {
-    wd.items.insert(id.to_string(), WikiDataItem::new(raw));
+    wd.items
+        .insert(QId::parse(id).unwrap(), WikiDataItem::new(raw));
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -137,7 +142,7 @@ async fn test_long_desc_en_male_writer_deceased() {
     let sd = ShortDescription::new();
     let claims = claims_male_writer_deceased();
     let opt = DescOptions {
-        lang: "en".to_string(),
+        lang: Lang::default(),
         links: "text".to_string(),
         ..Default::default()
     };
@@ -177,7 +182,7 @@ async fn test_long_desc_en_female_alive() {
     let sd = ShortDescription::new();
     let claims = claims_female_scientist_alive();
     let opt = DescOptions {
-        lang: "en".to_string(),
+        lang: Lang::default(),
         links: "text".to_string(),
         ..Default::default()
     };
@@ -216,7 +221,7 @@ async fn test_long_desc_returns_none_for_non_person() {
     let sd = ShortDescription::new();
     let claims = claims_non_person();
     let opt = DescOptions {
-        lang: "en".to_string(),
+        lang: Lang::default(),
         links: "text".to_string(),
         ..Default::default()
     };
@@ -228,6 +233,7 @@ async fn test_long_desc_returns_none_for_non_person() {
 /// Unsupported language returns None.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_returns_none_for_unsupported_lang() {
+    autodesc::lang_type::init_langs().await;
     let mock_server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/w/api.php"))
@@ -241,7 +247,7 @@ async fn test_long_desc_returns_none_for_unsupported_lang() {
     let sd = ShortDescription::new();
     let claims = claims_male_writer_deceased();
     let opt = DescOptions {
-        lang: "ja".to_string(), // Japanese is not in LONG_DESC_LANGUAGES
+        lang: Lang::parse("ja").unwrap(), // Japanese is not in LONG_DESC_LANGUAGES
         links: "text".to_string(),
         ..Default::default()
     };
@@ -253,6 +259,7 @@ async fn test_long_desc_returns_none_for_unsupported_lang() {
 /// Dutch long description uses Dutch pronouns and month names.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_nl() {
+    autodesc::lang_type::init_langs().await;
     let dutch_entities = json!({
         "Q145": {
             "type": "item", "id": "Q145", "ns": 0,
@@ -304,7 +311,7 @@ async fn test_long_desc_nl() {
     let sd = ShortDescription::new();
     let claims = claims_male_writer_deceased();
     let opt = DescOptions {
-        lang: "nl".to_string(),
+        lang: Lang::parse("nl").unwrap(),
         links: "text".to_string(),
         ..Default::default()
     };
@@ -329,6 +336,7 @@ async fn test_long_desc_nl() {
 /// French long description uses French pronouns.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_fr() {
+    autodesc::lang_type::init_langs().await;
     let french_entities = json!({
         "Q145": {
             "type": "item", "id": "Q145", "ns": 0,
@@ -380,7 +388,7 @@ async fn test_long_desc_fr() {
     let sd = ShortDescription::new();
     let claims = claims_male_writer_deceased();
     let opt = DescOptions {
-        lang: "fr".to_string(),
+        lang: Lang::parse("fr").unwrap(),
         links: "text".to_string(),
         ..Default::default()
     };
@@ -415,7 +423,7 @@ async fn test_long_desc_link_mode_wikidata() {
     let sd = ShortDescription::new();
     let claims = claims_male_writer_deceased();
     let opt = DescOptions {
-        lang: "en".to_string(),
+        lang: Lang::default(),
         links: "wikidata".to_string(),
         ..Default::default()
     };
@@ -449,7 +457,7 @@ async fn test_long_desc_link_mode_wiki() {
     let sd = ShortDescription::new();
     let claims = claims_male_writer_deceased();
     let opt = DescOptions {
-        lang: "en".to_string(),
+        lang: Lang::default(),
         links: "wiki".to_string(),
         ..Default::default()
     };
@@ -487,7 +495,7 @@ async fn test_long_desc_link_mode_wikipedia() {
     let sd = ShortDescription::new();
     let claims = claims_male_writer_deceased();
     let opt = DescOptions {
-        lang: "en".to_string(),
+        lang: Lang::default(),
         links: "wikipedia".to_string(),
         ..Default::default()
     };
@@ -535,7 +543,7 @@ async fn test_long_desc_multiple_occupations() {
 
     let sd = ShortDescription::new();
     let opt = DescOptions {
-        lang: "en".to_string(),
+        lang: Lang::default(),
         links: "text".to_string(),
         ..Default::default()
     };
@@ -570,7 +578,7 @@ async fn test_long_desc_minimal_person() {
 
     let sd = ShortDescription::new();
     let opt = DescOptions {
-        lang: "en".to_string(),
+        lang: Lang::default(),
         links: "text".to_string(),
         ..Default::default()
     };
@@ -602,7 +610,7 @@ async fn test_long_desc_p107_person() {
 
     let sd = ShortDescription::new();
     let opt = DescOptions {
-        lang: "en".to_string(),
+        lang: Lang::default(),
         links: "text".to_string(),
         ..Default::default()
     };
@@ -632,7 +640,7 @@ async fn test_long_desc_batch_load_called() {
 
     let sd = ShortDescription::new();
     let opt = DescOptions {
-        lang: "en".to_string(),
+        lang: Lang::default(),
         links: "text".to_string(),
         ..Default::default()
     };
@@ -700,7 +708,7 @@ async fn test_load_item_long_mode() {
     let sd = ShortDescription::new();
     let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
     let mut opt = DescOptions {
-        lang: "en".to_string(),
+        lang: Lang::default(),
         links: "text".to_string(),
         mode: "long".to_string(),
         ..Default::default()

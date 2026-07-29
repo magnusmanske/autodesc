@@ -1,4 +1,6 @@
+use autodesc::Lang;
 use autodesc::desc_options::DescOptions;
+use autodesc::qid::QId;
 use autodesc::short_desc::{ShortDescription, WordHints};
 use autodesc::wikidata::WikiData;
 
@@ -8,7 +10,7 @@ async fn test_api_person_q42_text() {
     let sd = ShortDescription::new();
     let mut wd = WikiData::new();
     let mut opt = DescOptions {
-        lang: "en".to_string(),
+        lang: Lang::default(),
         links: "text".to_string(),
         ..Default::default()
     };
@@ -47,7 +49,7 @@ async fn test_api_person_q42_wikidata_links() {
     let sd = ShortDescription::new();
     let mut wd = WikiData::new();
     let mut opt = DescOptions {
-        lang: "en".to_string(),
+        lang: Lang::default(),
         links: "wikidata".to_string(),
         ..Default::default()
     };
@@ -71,7 +73,7 @@ async fn test_api_item_wiki_links() {
     let sd = ShortDescription::new();
     let mut wd = WikiData::new();
     let mut opt = DescOptions {
-        lang: "en".to_string(),
+        lang: Lang::default(),
         links: "wiki".to_string(),
         ..Default::default()
     };
@@ -91,7 +93,7 @@ async fn test_api_generic_item() {
     let sd = ShortDescription::new();
     let mut wd = WikiData::new();
     let mut opt = DescOptions {
-        lang: "en".to_string(),
+        lang: Lang::default(),
         links: "text".to_string(),
         ..Default::default()
     };
@@ -113,10 +115,11 @@ async fn test_api_generic_item() {
 /// Test a German-language description.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_api_person_german() {
+    autodesc::lang_type::init_langs().await;
     let sd = ShortDescription::new();
     let mut wd = WikiData::new();
     let mut opt = DescOptions {
-        lang: "de".to_string(),
+        lang: Lang::parse("de").unwrap(),
         links: "text".to_string(),
         ..Default::default()
     };
@@ -145,7 +148,7 @@ async fn test_api_numeric_q() {
     let sd = ShortDescription::new();
     let mut wd = WikiData::new();
     let mut opt = DescOptions {
-        lang: "en".to_string(),
+        lang: Lang::default(),
         links: "text".to_string(),
         ..Default::default()
     };
@@ -162,14 +165,16 @@ async fn test_api_label_and_description() {
     let sd = ShortDescription::new();
     let mut wd = WikiData::new();
     let mut opt = DescOptions {
-        lang: "en".to_string(),
+        lang: Lang::default(),
         links: "text".to_string(),
         ..Default::default()
     };
 
     let _ = sd.load_item("Q42", &mut opt, &mut wd).await;
 
-    let item = wd.get_item("Q42").expect("Q42 should be loaded");
+    let item = wd
+        .get_item(&QId::parse("Q42").unwrap())
+        .expect("Q42 should be loaded");
     let label = item.get_label(Some("en"));
     assert_eq!(label, "Douglas Adams");
 
@@ -183,7 +188,7 @@ async fn test_api_disambig() {
     let sd = ShortDescription::new();
     let mut wd = WikiData::new();
     let mut opt = DescOptions {
-        lang: "en".to_string(),
+        lang: Lang::default(),
         links: "text".to_string(),
         ..Default::default()
     };
@@ -323,7 +328,7 @@ async fn test_api_wikipedia_links() {
     let sd = ShortDescription::new();
     let mut wd = WikiData::new();
     let mut opt = DescOptions {
-        lang: "en".to_string(),
+        lang: Lang::default(),
         links: "wikipedia".to_string(),
         ..Default::default()
     };
@@ -367,7 +372,7 @@ async fn test_wikidata_item_methods() {
     let mut wd = WikiData::new();
     wd.load_entity("Q12345").await.unwrap();
 
-    let item = wd.get_item("Q12345").unwrap();
+    let item = wd.get_item(&QId::parse("Q12345").unwrap()).unwrap();
 
     // Test get_id
     assert_eq!(item.get_id(), "Q12345");
@@ -417,10 +422,10 @@ async fn test_batch_loading_dedup() {
     ];
     wd.get_item_batch(&items).await.unwrap();
 
-    assert!(wd.has_item("Q42"));
-    assert!(wd.has_item("Q1"));
+    assert!(wd.has_item(&QId::parse("Q42").unwrap()));
+    assert!(wd.has_item(&QId::parse("Q1").unwrap()));
 
     // Second load should be a no-op (items already cached)
     wd.get_item_batch(&["Q42".to_string()]).await.unwrap();
-    assert!(wd.has_item("Q42"));
+    assert!(wd.has_item(&QId::parse("Q42").unwrap()));
 }

@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::wikidata::{WikiData, sanitize_q};
+use crate::qid::QId;
+use crate::wikidata::WikiData;
 
 /// Media properties mapped from Wikidata property IDs to human-readable names.
 const MEDIA_PROPS: &[(&str, &str)] = &[
@@ -61,9 +62,12 @@ impl MediaGenerator {
         wd: &mut WikiData,
     ) -> MediaResult {
         let mut result = MediaResult::default();
-        let q = sanitize_q(q);
+        let q = match QId::parse(q) {
+            Ok(q) => q,
+            Err(_) => return result,
+        };
 
-        if let Err(e) = wd.load_entity(&q).await {
+        if let Err(e) = wd.load_entity(q.as_str()).await {
             tracing::warn!("Failed to load entity {} for media: {}", q, e);
             return result;
         }

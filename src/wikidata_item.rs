@@ -8,22 +8,9 @@ pub const MAIN_LANGUAGES: &[&str] = &[
     "en", "de", "fr", "nl", "es", "it", "pl", "pt", "ja", "ru", "hu", "sv", "fi",
 ];
 
-/// Normalize an entity ID to uppercase with proper prefix (removes whitespace).
-pub fn unified_id(name: &str) -> String {
-    name.chars()
-        .filter(|c| !c.is_whitespace())
-        .collect::<String>()
-        .to_uppercase()
-}
-
-/// Sanitize a Q-id: ensure it starts with "Q".
-pub fn sanitize_q(q: &str) -> String {
-    let q = q.trim().to_uppercase();
-    if q.chars().all(|c| c.is_ascii_digit()) {
-        format!("Q{}", q)
-    } else {
-        q
-    }
+/// Normalize a property or Q-id by trimming and uppercasing.
+fn unified_id(s: &str) -> String {
+    s.trim().to_uppercase()
 }
 
 /// Represents a single Wikidata entity with helper methods for extracting data.
@@ -370,20 +357,6 @@ impl WikiDataItem {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_sanitize_q() {
-        assert_eq!(sanitize_q("12345"), "Q12345");
-        assert_eq!(sanitize_q("Q42"), "Q42");
-        assert_eq!(sanitize_q("q42"), "Q42");
-        assert_eq!(sanitize_q("  Q42  "), "Q42");
-    }
-
-    #[test]
-    fn test_unified_id() {
-        assert_eq!(unified_id("p31"), "P31");
-        assert_eq!(unified_id("Q 42"), "Q42");
-    }
 
     #[test]
     fn test_placeholder() {

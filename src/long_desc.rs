@@ -5,6 +5,7 @@ use regex::Regex;
 use serde_json::Value;
 
 use crate::desc_options::DescOptions;
+use crate::qid::QId;
 use crate::short_desc::ShortDescription;
 use crate::wikidata::{WikiData, WikiDataItem};
 
@@ -185,7 +186,7 @@ impl LongDescGenerator {
         opt: &DescOptions,
         wd: &mut WikiData,
     ) -> Option<String> {
-        if !is_long_desc_available(&opt.lang) {
+        if !is_long_desc_available(opt.lang.as_str()) {
             return None;
         }
 
@@ -223,7 +224,7 @@ impl LongDescGenerator {
         };
 
         let state = LongDescState {
-            lang: opt.lang.clone(),
+            lang: opt.lang.as_str().to_string(),
             is_male,
             is_female,
             is_dead,
@@ -313,7 +314,7 @@ fn resolve_fragments(state: &LongDescState, opt: &DescOptions, wd: &WikiData) ->
             Fragment::Item { q, before, after } => {
                 output.push_str(before);
                 let label = wd
-                    .get_item(q)
+                    .get_item(&QId::parse(q).unwrap())
                     .map(|item| {
                         let label = item.get_label(Some(&state.lang));
                         if label == item.get_id() {
@@ -352,13 +353,17 @@ fn format_link(q: &str, label: &str, opt: &DescOptions, wd: &WikiData) -> String
             )
         }
         "wiki" => {
-            if let Some(page) = wd.get_item(q).and_then(|item| {
-                item.raw
-                    .get("sitelinks")
-                    .and_then(|s| s.get(&wiki))
-                    .and_then(|s| s.get("title"))
-                    .and_then(|t| t.as_str())
-            }) {
+            if let Some(page) = QId::parse(q)
+                .ok()
+                .and_then(|qid| wd.get_item(&qid))
+                .and_then(|item| {
+                    item.raw
+                        .get("sitelinks")
+                        .and_then(|s| s.get(&wiki))
+                        .and_then(|s| s.get("title"))
+                        .and_then(|t| t.as_str())
+                })
+            {
                 if page == label {
                     format!("[[{}]]", label)
                 } else {
@@ -369,13 +374,17 @@ fn format_link(q: &str, label: &str, opt: &DescOptions, wd: &WikiData) -> String
             }
         }
         "wikipedia" => {
-            if let Some(page) = wd.get_item(q).and_then(|item| {
-                item.raw
-                    .get("sitelinks")
-                    .and_then(|s| s.get(&wiki))
-                    .and_then(|s| s.get("title"))
-                    .and_then(|t| t.as_str())
-            }) {
+            if let Some(page) = QId::parse(q)
+                .ok()
+                .and_then(|qid| wd.get_item(&qid))
+                .and_then(|item| {
+                    item.raw
+                        .get("sitelinks")
+                        .and_then(|s| s.get(&wiki))
+                        .and_then(|s| s.get("title"))
+                        .and_then(|t| t.as_str())
+                })
+            {
                 let encoded = urlencoding::encode(&page.replace(' ', "_")).to_string();
                 format!(
                     "<a href='https://{lang}.wikipedia.org/wiki/{page}'{lt}>{label}</a>",
@@ -604,7 +613,9 @@ pub(super) fn get_first_claim_string(claims: &Value, prop: &str) -> Option<Strin
 
 /// Get the main label for the item.
 pub(super) fn get_main_title_label(q: &str, wd: &WikiData, lang: &str) -> String {
-    wd.get_item(q)
+    QId::parse(q)
+        .ok()
+        .and_then(|qid| wd.get_item(&qid))
         .map(|item| item.get_label(Some(lang)))
         .unwrap_or_else(|| q.to_string())
 }

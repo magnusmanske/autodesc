@@ -1,5 +1,6 @@
 use serde_json::Value;
 
+use crate::qid::QId;
 use crate::short_desc::ShortDescription;
 use crate::wikidata::WikiData;
 
@@ -76,7 +77,7 @@ impl LangGenerator for LangEn {
         let nationalities = get_claim_item_ids(claims, "P27");
         for (k, country_q) in nationalities.iter().enumerate() {
             let country_label = wd
-                .get_item(country_q)
+                .get_item(&QId::parse(country_q).unwrap())
                 .map(|i| i.get_label(Some(&state.lang)))
                 .unwrap_or_default();
             let nationality =
@@ -101,7 +102,7 @@ impl LangGenerator for LangEn {
             let sep = get_sep_after_en(occupations.len(), k);
             if (state.is_female || state.is_male)
                 && let Some(gendered) = wd
-                    .get_item(occ_q)
+                    .get_item(&QId::parse(occ_q).unwrap())
                     .and_then(|i| i.get_gendered_label(&state.lang, state.is_female))
             {
                 state.push_text(&gendered);

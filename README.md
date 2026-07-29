@@ -1,6 +1,6 @@
 # AutoDesc
 
-Generates human-readable descriptions for [Wikidata](https://www.wikidata.org/) items. It can produce short one-line descriptions (in many languages) or longer prose paragraphs for people (currently English, Dutch, and French). Runs as a small HTTP server with a JSON API.
+Generates human-readable descriptions for [Wikidata](https://www.wikidata.org/) items. It can produce short one-line descriptions (in many languages) or longer prose paragraphs for people (currently English, Dutch, French, and German). Runs as a small HTTP server with a JSON API.
 
 ## Building
 
@@ -26,6 +26,12 @@ By default it listens on `0.0.0.0:8000`. Override with environment variables:
 | `AUTODESC_ITEM_CACHE_SIZE` | `10000` | Max number of cached items |
 | `AUTODESC_OUTPUT_CACHE_TTL_SECS` | `600` | How long to cache generated descriptions (seconds) |
 | `AUTODESC_OUTPUT_CACHE_SIZE` | `1000` | Max number of cached output strings |
+| `AUTODESC_MAX_CONCURRENCY` | `5000` | Max concurrent requests |
+| `AUTODESC_TIMEOUT_SEC` | `120` | Per-request timeout |
+| `AUTODESC_SEMAPHORE_TIMEOUT_SECS` | `10` | Wikidata API semaphore timeout |
+| `AUTODESC_RATE_LIMIT` | `100` | Max requests per IP per rate window |
+| `AUTODESC_RATE_WINDOW_SECS` | `10` | Rate-limiting window |
+| `AUTODESC_REQWEST_POOL_IDLE` | `128` | Reqwest connection pool idle limit |
 
 Logging level is controlled via `RUST_LOG` (e.g. `RUST_LOG=debug`).
 
@@ -90,11 +96,12 @@ GET /?q=Q42&lang=nl&links=wikipedia&format=json
 
 ## Long descriptions
 
-Long prose descriptions are generated for **people** only, currently in three languages:
+Long prose descriptions are generated for **people** only, currently in four languages:
 
 - **English** (`en`)
 - **Dutch** (`nl`)
 - **French** (`fr`)
+- **German** (`de`)
 
 They include, where available: nationality, occupation, birth and death details, education, career positions, family, and burial place. If a language doesn't support long descriptions, the response falls back to the short format.
 
@@ -103,6 +110,8 @@ They include, where available: nationality, occupation, birth and death details,
 `autodesc` is also a regular Rust crate. The main types you'll care about:
 
 ```rust
+use autodesc::QId;
+use autodesc::Lang;
 use autodesc::desc_options::DescOptions;
 use autodesc::short_desc::ShortDescription;
 use autodesc::wikidata::WikiData;
@@ -110,14 +119,15 @@ use autodesc::wikidata::WikiData;
 let sd = ShortDescription::new();
 let mut wd = WikiData::new();
 let mut opt = DescOptions {
-    lang: "en".to_string(),
+    q: QId::parse("Q42").unwrap(),
+    lang: Lang::parse("en").unwrap(),
     links: "text".to_string(),
     mode: "short".to_string(),
     ..Default::default()
 };
 
-let (q, description) = sd.load_item("Q42", &mut opt, &mut wd).await;
-println!("{}: {}", q, description);
+let (q, description) = sd.load_item(q.as_str(), &mut opt, &mut wd).await;
+println!("{q}: {description}");
 ```
 
 For long descriptions directly:
@@ -144,3 +154,15 @@ cargo test
 ```
 
 The unit and integration tests are split into two groups. Tests that hit the real Wikidata API live in `tests/api_integration.rs`; tests for the long-description generator use [wiremock](https://docs.rs/wiremock) and don't make any real network requests (`tests/long_desc_tests.rs`).
+
+## Project stats
+
+| Metric | Value |
+|---|---|
+| Source lines | ~8 100 (20 `.rs` files in `src/`) |
+| Test lines | ~1 200 (2 test files) |
+| Test count | **181** (151 unit + 15 integration + 15 WireMock long-desc) |
+| Code coverage (tarpaulin) | **63%** (1 600 / 2 533 lines) |
+| Longest single file | `describers.rs` (~700 lines) |
+| Supported languages for long desc | 4 (en, nl, fr, de) |
+| Supported languages for short desc | ~300 |

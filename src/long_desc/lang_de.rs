@@ -3,6 +3,7 @@ use std::sync::OnceLock;
 
 use serde_json::Value;
 
+use crate::qid::QId;
 use crate::short_desc::ShortDescription;
 use crate::wikidata::WikiData;
 
@@ -95,7 +96,7 @@ impl LangGenerator for LangDe {
         let nationalities = get_claim_item_ids(claims, "P27");
         for (k, country_q) in nationalities.iter().enumerate() {
             let country_label = wd
-                .get_item(country_q)
+                .get_item(&QId::parse(country_q).unwrap())
                 .map(|i| i.get_label(Some(&state.lang)))
                 .unwrap_or_default();
 
@@ -107,7 +108,9 @@ impl LangGenerator for LangDe {
             let nationality = de_adj_base_for_country(country_q)
                 .map(|s| s.to_string())
                 .or_else(|| {
-                    wd.get_item(country_q)
+                    QId::parse(country_q)
+                        .ok()
+                        .and_then(|qid| wd.get_item(&qid))
                         .and_then(|i| i.get_demonym_adjective_base("de"))
                 })
                 .map(|base| format!("{}{}", base, suffix))
@@ -140,7 +143,7 @@ impl LangGenerator for LangDe {
             let sep = get_sep_after_de(occupations.len(), k);
             if (state.is_female || state.is_male)
                 && let Some(gendered) = wd
-                    .get_item(occ_q)
+                    .get_item(&QId::parse(occ_q).unwrap())
                     .and_then(|i| i.get_gendered_label(&state.lang, state.is_female))
             {
                 state.push_text(&gendered);

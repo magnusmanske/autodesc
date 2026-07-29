@@ -1,8 +1,11 @@
 /// Options passed to the description generator.
+use crate::lang_type::Lang;
+use crate::qid::QId;
+
 #[derive(Debug, Clone)]
 pub struct DescOptions {
-    pub q: String,
-    pub lang: String,
+    pub q: QId,
+    pub lang: Lang,
     pub links: String,
     pub linktarget: String,
     pub redlinks: String,
@@ -13,8 +16,8 @@ pub struct DescOptions {
 impl Default for DescOptions {
     fn default() -> Self {
         Self {
-            q: String::new(),
-            lang: "en".to_string(),
+            q: QId::parse("Q0").unwrap(), // placeholder; always overwritten
+            lang: Lang::default(),
             links: "wikidata".to_string(),
             linktarget: String::new(),
             redlinks: String::new(),

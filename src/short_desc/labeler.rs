@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::desc_options::DescOptions;
+use crate::qid::QId;
 use crate::wikidata::WikiData;
 
 use super::ShortDescription;
@@ -18,7 +19,7 @@ impl ShortDescription {
             return HashMap::new();
         }
 
-        let use_lang = &opt.lang;
+        let use_lang = opt.lang.as_str();
 
         let mut seen: HashSet<String> = HashSet::new();
         let mut ids: Vec<String> = Vec::new();
@@ -43,7 +44,7 @@ impl ShortDescription {
         let mut cb: HashMap<u64, Vec<String>> = HashMap::new();
 
         for q_str in &ids {
-            let item = match wd.get_item(q_str) {
+            let item = match QId::parse(q_str).ok().and_then(|q| wd.get_item(&q)) {
                 Some(i) => i,
                 None => continue,
             };
@@ -211,7 +212,10 @@ impl ShortDescription {
             .iter()
             .filter(|(p, _)| *p == prop)
             .filter_map(|(_, q)| {
-                let label = wd.get_item(q)?.get_label(Some(lang));
+                let label = QId::parse(q)
+                    .ok()
+                    .and_then(|qid| wd.get_item(&qid))?
+                    .get_label(Some(lang));
                 if label == *q {
                     None
                 } else {
@@ -232,7 +236,10 @@ impl ShortDescription {
         wd: &WikiData,
     ) -> String {
         if let Some(q) = country_q
-            && let Some(demonym) = wd.get_item(q).and_then(|item| item.get_demonym(lang))
+            && let Some(demonym) = QId::parse(q)
+                .ok()
+                .and_then(|qid| wd.get_item(&qid))
+                .and_then(|item| item.get_demonym(lang))
         {
             return demonym;
         }

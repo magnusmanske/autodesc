@@ -9,7 +9,8 @@ use reqwest::Client;
 use serde_json::Value;
 use tokio::sync::Semaphore;
 
-pub use crate::wikidata_item::{MAIN_LANGUAGES, WikiDataItem, sanitize_q, unified_id};
+use crate::qid::QId;
+pub use crate::wikidata_item::{MAIN_LANGUAGES, WikiDataItem};
 
 fn global_client() -> &'static Client {
     static CLIENT: OnceLock<Client> = OnceLock::new();
@@ -99,12 +100,12 @@ where
 
 /// The main Wikidata client that fetches and caches entities.
 pub struct WikiData {
-    pub items: HashMap<String, WikiDataItem>,
+    pub items: HashMap<QId, WikiDataItem>,
     client: Client,
     api_url: String,
     max_get_entities: usize,
     /// Optional shared global item cache.
-    item_cache: Option<Cache<String, WikiDataItem>>,
+    item_cache: Option<Cache<QId, WikiDataItem>>,
 }
 
 impl WikiData {
@@ -123,17 +124,17 @@ impl WikiData {
     }
 
     /// Attach a shared global item cache. Items will be read from and written to it.
-    pub fn with_item_cache(mut self, cache: Cache<String, WikiDataItem>) -> Self {
+    pub fn with_item_cache(mut self, cache: Cache<QId, WikiDataItem>) -> Self {
         self.item_cache = Some(cache);
         self
     }
 
-    pub fn has_item(&self, q: &str) -> bool {
-        self.items.contains_key(&unified_id(q))
+    pub fn has_item(&self, q: &QId) -> bool {
+        self.items.contains_key(q)
     }
 
-    pub fn get_item(&self, q: &str) -> Option<&WikiDataItem> {
-        self.items.get(&unified_id(q))
+    pub fn get_item(&self, q: &QId) -> Option<&WikiDataItem> {
+        self.items.get(q)
     }
 
     pub fn clear(&mut self) {
@@ -143,11 +144,14 @@ impl WikiData {
     /// Fetch a batch of entities from the Wikidata API.
     /// Entities already in the local map or global item cache are skipped.
     pub async fn get_item_batch(&mut self, item_list: &[String]) -> anyhow::Result<()> {
-        let mut to_load: Vec<String> = Vec::new();
+        let mut to_load: Vec<QId> = Vec::new();
         let mut seen = HashSet::new();
 
-        for q in item_list {
-            let q = sanitize_q(q);
+        for q_raw in item_list {
+            let q = match QId::parse(q_raw) {
+                Ok(q) => q,
+                Err(_) => continue,
+            };
             if self.items.contains_key(&q) || seen.contains(&q) {
                 continue;
             }
@@ -175,8 +179,12 @@ impl WikiData {
         Ok(())
     }
 
-    async fn load_item_chunk(&mut self, chunk: &[String]) -> Result<(), anyhow::Error> {
-        let ids = chunk.join("|");
+    async fn load_item_chunk(&mut self, chunk: &[QId]) -> Result<(), anyhow::Error> {
+        let ids: String = chunk
+            .iter()
+            .map(|q| q.as_str())
+            .collect::<Vec<_>>()
+            .join("|");
         let params = [
             ("action", "wbgetentities"),
             ("ids", &ids),
@@ -228,7 +236,7 @@ impl WikiData {
 
         if let Some(entities) = resp.get("entities").and_then(|e| e.as_object()) {
             for (k, v) in entities {
-                let q = unified_id(k);
+                let q = QId::from_api_key(k);
                 let item = WikiDataItem::new(v.clone());
                 // Populate global item cache with freshly loaded items.
                 if let Some(cache) = &self.item_cache {
@@ -242,8 +250,8 @@ impl WikiData {
 
     /// Convenience: load a single entity by Q-id.
     pub async fn load_entity(&mut self, q: &str) -> anyhow::Result<()> {
-        let q = sanitize_q(q);
-        self.get_item_batch(&[q]).await
+        let q = QId::parse(q).map_err(|e| anyhow::anyhow!("Invalid Q-id: {e}"))?;
+        self.get_item_batch(&[q.as_str().to_string()]).await
     }
 
     /// Fetch JSON from an arbitrary URL via GET with query params.
@@ -486,9 +494,9 @@ mod tests {
 
         let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
         wd.load_entity("Q12345").await.unwrap();
-        assert!(wd.has_item("Q12345"));
+        assert!(wd.has_item(&QId::parse("Q12345").unwrap()));
 
-        let item = wd.get_item("Q12345").unwrap();
+        let item = wd.get_item(&QId::parse("Q12345").unwrap()).unwrap();
         assert!(!item.is_placeholder());
 
         let label = item.get_label(Some("en"));
@@ -517,8 +525,8 @@ mod tests {
         let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
         let items = vec!["Q42".to_string(), "Q1".to_string()];
         wd.get_item_batch(&items).await.unwrap();
-        assert!(wd.has_item("Q42"));
-        assert!(wd.has_item("Q1"));
+        assert!(wd.has_item(&QId::parse("Q42").unwrap()));
+        assert!(wd.has_item(&QId::parse("Q1").unwrap()));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -539,9 +547,9 @@ mod tests {
 
         let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
         wd.load_entity("Q42").await.unwrap();
-        assert!(wd.has_item("Q42"));
+        assert!(wd.has_item(&QId::parse("Q42").unwrap()));
         wd.clear();
-        assert!(!wd.has_item("Q42"));
+        assert!(!wd.has_item(&QId::parse("Q42").unwrap()));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -564,8 +572,8 @@ mod tests {
             "q1".to_string(),
         ];
         wd.get_item_batch(&items).await.unwrap();
-        assert!(wd.has_item("Q42"));
-        assert!(wd.has_item("Q1"));
+        assert!(wd.has_item(&QId::parse("Q42").unwrap()));
+        assert!(wd.has_item(&QId::parse("Q1").unwrap()));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -589,6 +597,6 @@ mod tests {
         let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
         wd.load_entity("Q42").await.unwrap();
         wd.load_entity("Q42").await.unwrap();
-        assert!(wd.has_item("Q42"));
+        assert!(wd.has_item(&QId::parse("Q42").unwrap()));
     }
 }

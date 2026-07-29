@@ -1,8 +1,12 @@
+use autodesc::Format;
+use autodesc::Lang;
 use autodesc::desc_options::DescOptions;
+use autodesc::lang_type;
 use autodesc::media::MediaGenerator;
+use autodesc::qid::QId;
 use autodesc::short_desc::ShortDescription;
 use autodesc::validation;
-use autodesc::wikidata::{WikiData, WikiDataItem, sanitize_q};
+use autodesc::wikidata::{WikiData, WikiDataItem};
 use axum::{
     Router,
     error_handling::HandleErrorLayer,
@@ -73,7 +77,7 @@ impl IpRateLimiter {
 
 #[derive(Clone)]
 struct AppState {
-    item_cache: Cache<String, WikiDataItem>,
+    item_cache: Cache<QId, WikiDataItem>,
     output_cache: Cache<String, String>,
     rate_limiter: IpRateLimiter,
     start_time: Instant,
@@ -153,7 +157,7 @@ pub struct ApiParams {
     #[serde(default)]
     pub redlinks: String,
     #[serde(default = "default_format")]
-    pub format: String,
+    pub format: Format,
     #[serde(default = "default_get_infobox")]
     pub get_infobox: String,
     #[serde(default)]
@@ -177,8 +181,8 @@ fn default_mode() -> String {
 fn default_links() -> String {
     "text".to_string()
 }
-fn default_format() -> String {
-    "jsonfm".to_string()
+fn default_format() -> Format {
+    Format::JsonFm
 }
 fn default_get_infobox() -> String {
     "yes".to_string()
@@ -236,13 +240,6 @@ fn validate_params(params: &ApiParams) -> Result<(), ValidationErrors> {
         ));
     }
 
-    if !validation::validate_format(&params.format) {
-        errs.push(format!(
-            "Invalid format: '{}'. Allowed: json, jsonfm, html",
-            params.format
-        ));
-    }
-
     if let Some(ref callback) = params.callback
         && !callback.is_empty()
         && !validation::validate_jsonp_callback(callback)
@@ -257,7 +254,6 @@ fn validate_params(params: &ApiParams) -> Result<(), ValidationErrors> {
         ("lang", &params.lang),
         ("mode", &params.mode),
         ("links", &params.links),
-        ("format", &params.format),
         ("redlinks", &params.redlinks),
         ("get_infobox", &params.get_infobox),
         ("infobox_template", &params.infobox_template),
@@ -323,8 +319,8 @@ fn error_json_multi(status: StatusCode, msg: &str, errors: &[String]) -> Respons
 }
 
 fn cached_response(cached_json: String, args: &ApiParams) -> Response {
-    match args.format.as_str() {
-        "html" => {
+    match args.format {
+        Format::Html => {
             let v: Value = serde_json::from_str(&cached_json).unwrap_or_default();
             let label = v["label"].as_str().unwrap_or("").to_string();
             let q = v["q"].as_str().unwrap_or("").to_string();
@@ -350,7 +346,7 @@ fn cached_response(cached_json: String, args: &ApiParams) -> Response {
             html.push_str("</body></html>");
             Html(html).into_response()
         }
-        "jsonfm" => {
+        Format::JsonFm => {
             let json_text = serde_json::to_string_pretty(
                 &serde_json::from_str::<Value>(&cached_json).unwrap_or_default(),
             )
@@ -363,7 +359,7 @@ fn cached_response(cached_json: String, args: &ApiParams) -> Response {
             html.push_str("</pre></body></html>");
             Html(html).into_response()
         }
-        _ => {
+        Format::Json => {
             if let Some(ref callback) = args.callback
                 && !callback.is_empty()
             {
@@ -423,7 +419,7 @@ async fn api_handler(
         args.lang = DEFAULT_LANGUAGE.to_string();
     }
 
-    if args.format == "html" && args.media == "1" && args.thumb.is_empty() {
+    if args.format == Format::Html && args.media == "1" && args.thumb.is_empty() {
         args.thumb = "200".to_string();
     }
 
@@ -432,16 +428,20 @@ async fn api_handler(
         _ => return Html(INDEX_HTML.to_string()).into_response(),
     };
 
-    let q = sanitize_q(&q_raw);
-    args.q = Some(q.clone());
+    let q = match QId::parse(&q_raw) {
+        Ok(q) => q,
+        Err(e) => return error_json(StatusCode::BAD_REQUEST, &format!("Invalid Q-id: {e}")),
+    };
+    args.q = Some(q.as_str().to_string());
 
     let output_key = format!(
-        "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
-        q,
+        "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+        q.as_str(),
         args.lang,
         args.mode,
         args.links,
         args.redlinks,
+        args.format.as_str(),
         args.get_infobox,
         args.infobox_template,
         args.media,
@@ -455,7 +455,7 @@ async fn api_handler(
 
     let mut opt = DescOptions {
         q: q.clone(),
-        lang: args.lang.clone(),
+        lang: Lang::parse(&args.lang).unwrap_or_else(|_| Lang::default()),
         links: args.links.clone(),
         mode: args.mode.clone(),
         ..Default::default()
@@ -464,7 +464,7 @@ async fn api_handler(
     let mut wd = WikiData::new().with_item_cache(state.item_cache.clone());
     let sd = ShortDescription::global();
 
-    let (_result_q, output) = sd.load_item(&q, &mut opt, &mut wd).await;
+    let (_result_q, output) = sd.load_item(q.as_str(), &mut opt, &mut wd).await;
 
     let label = wd
         .get_item(&q)
@@ -482,7 +482,7 @@ async fn api_handler(
         "mode": args.mode,
         "links": args.links,
         "redlinks": args.redlinks,
-        "format": args.format,
+        "format": args.format.as_str(),
         "get_infobox": args.get_infobox,
         "infobox_template": args.infobox_template,
         "media": args.media,
@@ -493,7 +493,7 @@ async fn api_handler(
 
     let mut response = ApiResponse {
         call,
-        q: q.clone(),
+        q: q.to_string(),
         label: label.clone(),
         manual_description: manual_desc,
         result: output,
@@ -501,7 +501,7 @@ async fn api_handler(
         thumbnails: None,
     };
 
-    add_media(&args, &q, wd, &mut response).await;
+    add_media(&args, q.as_str(), wd, &mut response).await;
 
     let cached_json = serde_json::to_string(&response).unwrap_or_default();
     let cannot_describe = format!("<i>{}</i>", sd.txt("cannot_describe", &args.lang));
@@ -509,10 +509,10 @@ async fn api_handler(
         state.output_cache.insert(output_key, cached_json).await;
     }
 
-    match args.format.as_str() {
-        "html" => render_html(&args, q, label, &response),
-        "jsonfm" => render_jsonfm(&args, &response),
-        _ => render_json(args, response),
+    match args.format {
+        Format::Html => render_html(&args, q.to_string(), label, &response),
+        Format::JsonFm => render_jsonfm(&args, &response),
+        Format::Json => render_json(args, response),
     }
 }
 
@@ -664,6 +664,8 @@ async fn main() {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
+
+    lang_type::init_langs().await;
 
     let state = AppState::new();
 
