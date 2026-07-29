@@ -171,8 +171,14 @@ mod tests {
 
         let input = "<a href='https://www.wikidata.org/wiki/Q145'>United Kingdom</a>";
         let result = sd.txt2(input, "nationality", "en");
-        assert!(result.contains("British"), "Inner text should be replaced: {result}");
-        assert!(result.contains("<a href="), "Anchor tag preserved: {result}");
+        assert!(
+            result.contains("British"),
+            "Inner text should be replaced: {result}"
+        );
+        assert!(
+            result.contains("<a href="),
+            "Anchor tag preserved: {result}"
+        );
         assert!(result.contains("</a>"), "Closing tag preserved: {result}");
     }
 

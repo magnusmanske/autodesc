@@ -865,8 +865,21 @@ mod tests {
 
     fn en_config() -> LangConfig {
         LangConfig {
-            month_labels: ["", "January", "February", "March", "April", "May", "June",
-                "July", "August", "September", "October", "November", "December"],
+            month_labels: [
+                "",
+                "January",
+                "February",
+                "March",
+                "April",
+                "May",
+                "June",
+                "July",
+                "August",
+                "September",
+                "October",
+                "November",
+                "December",
+            ],
             pronoun_subject_male: "He",
             pronoun_possessive_male: "his",
             pronoun_subject_female: "She",

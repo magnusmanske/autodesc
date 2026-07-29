@@ -212,7 +212,11 @@ impl ShortDescription {
             .filter(|(p, _)| *p == prop)
             .filter_map(|(_, q)| {
                 let label = wd.get_item(q)?.get_label(Some(lang));
-                if label == *q { None } else { Some((label, q.clone())) }
+                if label == *q {
+                    None
+                } else {
+                    Some((label, q.clone()))
+                }
             })
             .collect()
     }

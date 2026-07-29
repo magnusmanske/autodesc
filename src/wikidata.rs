@@ -14,11 +14,18 @@ pub use crate::wikidata_item::{MAIN_LANGUAGES, WikiDataItem, sanitize_q, unified
 fn global_client() -> &'static Client {
     static CLIENT: OnceLock<Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
+        let pool_max_idle = std::env::var("AUTODESC_REQWEST_POOL_IDLE")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(128);
+
         Client::builder()
             .user_agent("autodesc/0.2.0 (https://github.com/magnusmanske/autodesc; magnusmanske@googlemail.com) reqwest")
             .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(20))
-            .pool_max_idle_per_host(32)
+            .timeout(Duration::from_secs(30))
+            .pool_max_idle_per_host(pool_max_idle)
+            .pool_idle_timeout(Duration::from_secs(90))
+            .tcp_keepalive(Duration::from_secs(60))
             .build()
             .expect("Failed to build HTTP client")
     })
@@ -40,6 +47,54 @@ pub fn set_semaphore_limit(n: usize) {
 fn get_semaphore() -> &'static Arc<Semaphore> {
     static SEM: OnceLock<Arc<Semaphore>> = OnceLock::new();
     SEM.get_or_init(|| Arc::new(Semaphore::new(SEMAPHORE_LIMIT.load(Ordering::Relaxed))))
+}
+
+/// How long to wait for a Wikidata API semaphore permit before giving up.
+fn semaphore_timeout() -> Duration {
+    static TIMEOUT: OnceLock<Duration> = OnceLock::new();
+    *TIMEOUT.get_or_init(|| {
+        let secs = std::env::var("AUTODESC_SEMAPHORE_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(10);
+        Duration::from_secs(secs)
+    })
+}
+
+/// Retry configuration for Wikidata API calls.
+const MAX_RETRIES: u32 = 3;
+const BASE_RETRY_DELAY_MS: u64 = 250;
+
+/// Error returned when the semaphore cannot be acquired in time.
+#[derive(Debug, thiserror::Error)]
+pub enum ApiError {
+    #[error("Too many concurrent Wikidata API requests; try again later")]
+    SemaphoreTimeout,
+    #[error("Wikidata API error: {0}")]
+    Api(#[from] anyhow::Error),
+}
+
+/// Execute a fallible async operation with exponential backoff retry.
+async fn with_retry<F, Fut, T>(operation: F) -> Result<T, anyhow::Error>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<T, anyhow::Error>>,
+{
+    let mut last_error = None;
+    for attempt in 0..MAX_RETRIES {
+        match operation().await {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                tracing::warn!(attempt, error = %e, "Wikidata API call failed, retrying");
+                last_error = Some(e);
+                if attempt + 1 < MAX_RETRIES {
+                    let delay_ms = BASE_RETRY_DELAY_MS * 2u64.pow(attempt);
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                }
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Retry exhausted with no error")))
 }
 
 /// The main Wikidata client that fetches and caches entities.
@@ -131,16 +186,45 @@ impl WikiData {
             ),
             ("format", "json"),
         ];
-        let _permit = get_semaphore().acquire().await?;
-        let resp = self
-            .client
-            .get(&self.api_url)
-            .query(&params)
-            .send()
-            .await?
-            .json::<Value>()
-            .await?;
-        drop(_permit);
+
+        // Acquire semaphore with timeout so we don't block indefinitely.
+        let _permit =
+            match tokio::time::timeout(semaphore_timeout(), get_semaphore().acquire()).await {
+                Ok(Ok(permit)) => permit,
+                Ok(Err(_)) => {
+                    return Err(anyhow::anyhow!("Semaphore closed"));
+                }
+                Err(_elapsed) => {
+                    tracing::warn!(
+                        "Semaphore acquisition timed out for chunk of {} items",
+                        chunk.len()
+                    );
+                    return Err(anyhow::anyhow!(
+                        "Too many concurrent Wikidata API requests; try again later"
+                    ));
+                }
+            };
+
+        // Use retry logic for the API call itself.
+        let api_url = self.api_url.clone();
+        let client = self.client.clone();
+
+        let resp = with_retry(|| {
+            let api_url = api_url.clone();
+            let client = client.clone();
+
+            async move {
+                let resp = client
+                    .get(&api_url)
+                    .query(&params)
+                    .send()
+                    .await?
+                    .json::<Value>()
+                    .await?;
+                Ok(resp)
+            }
+        })
+        .await?;
 
         if let Some(entities) = resp.get("entities").and_then(|e| e.as_object()) {
             for (k, v) in entities {
@@ -162,21 +246,36 @@ impl WikiData {
         self.get_item_batch(&[q]).await
     }
 
-    /// Fetch JSON from an arbitrary URL via POST.
+    /// Fetch JSON from an arbitrary URL via GET with query params.
     pub async fn get_json_params(
         &self,
         url: &str,
         params: &[(&str, &str)],
     ) -> anyhow::Result<Value> {
-        let resp = self
-            .client
-            .get(url)
-            .query(params)
-            .send()
-            .await?
-            .json::<Value>()
-            .await?;
-        Ok(resp)
+        let client = self.client.clone();
+        let url = url.to_string();
+        let params: Vec<(String, String)> = params
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+
+        with_retry(|| {
+            let client = client.clone();
+            let url = url.clone();
+            let params = params.clone();
+
+            async move {
+                let resp = client
+                    .get(&url)
+                    .query(&params)
+                    .send()
+                    .await?
+                    .json::<Value>()
+                    .await?;
+                Ok(resp)
+            }
+        })
+        .await
     }
 
     /// Fetch JSON from an arbitrary URL via GET.

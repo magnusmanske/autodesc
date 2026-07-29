@@ -19,8 +19,11 @@ mimalloc = { version = "0.1", features = ["secure"] }
 # Web framework
 axum = { version = "0.7", features = ["query"] }
 tokio = { version = "1", features = ["full"] }
-tower = { version = "0.4", features = ["limit", "load-shed"] }
-tower-http = { version = "0.5", features = ["cors", "timeout", "compression-full", "set-header"] }
+tower = { version = "0.4", features = ["limit", "load-shed", "buffer"] }
+tower-http = { version = "0.5", features = ["cors", "timeout", "compression-full", "set-header", "limit", "request-id"] }
+
+# Rate limiting
+governor = "0.6"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

@@ -1,36 +1,82 @@
 use autodesc::desc_options::DescOptions;
 use autodesc::media::MediaGenerator;
 use autodesc::short_desc::ShortDescription;
+use autodesc::validation;
 use autodesc::wikidata::{WikiData, WikiDataItem, sanitize_q};
 use axum::{
     Router,
     error_handling::HandleErrorLayer,
-    extract::{Query, State},
-    http::{HeaderValue, StatusCode, header},
-    response::{Html, IntoResponse, Response},
+    extract::{ConnectInfo, Query, State},
+    http::{HeaderValue, Method, StatusCode, header},
+    response::{Html, IntoResponse, Json, Response},
     routing::get,
 };
 use moka::future::Cache;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::time::Duration;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
 use tower::BoxError;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
+use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::set_header::response::SetResponseHeaderLayer;
 use tower_http::timeout::TimeoutLayer;
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-/// Shared application state holding both global caches.
+// ── Rate limiting ──────────────────────────────────────────────────────────
+
+/// Per-IP rate limiter using a simple sliding-window approach.
+#[derive(Clone)]
+struct IpRateLimiter {
+    buckets: Arc<RwLock<std::collections::HashMap<std::net::IpAddr, (Instant, u64)>>>,
+    max_requests: u64,
+    window: Duration,
+}
+
+impl IpRateLimiter {
+    fn new(max_requests: u64, window_secs: u64) -> Self {
+        Self {
+            buckets: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            max_requests,
+            window: Duration::from_secs(window_secs),
+        }
+    }
+
+    /// Returns true if the request is allowed, false if rate-limited.
+    async fn check(&self, ip: std::net::IpAddr) -> bool {
+        let now = Instant::now();
+        let mut buckets = self.buckets.write().await;
+
+        let entry = buckets.entry(ip).or_insert((now, 0));
+
+        if now.duration_since(entry.0) > self.window {
+            entry.0 = now;
+            entry.1 = 0;
+        }
+
+        if entry.1 >= self.max_requests {
+            false
+        } else {
+            entry.1 += 1;
+            true
+        }
+    }
+}
+
+// ── App state ──────────────────────────────────────────────────────────────
+
 #[derive(Clone)]
 struct AppState {
-    /// Cache of Wikidata items (Q-id → WikiDataItem).
     item_cache: Cache<String, WikiDataItem>,
-    /// Cache of generated output strings (cache-key → output).
     output_cache: Cache<String, String>,
+    rate_limiter: IpRateLimiter,
+    start_time: Instant,
 }
 
 impl AppState {
@@ -38,7 +84,7 @@ impl AppState {
         let item_ttl = std::env::var("AUTODESC_ITEM_CACHE_TTL_SECS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(3600); // 1 hour
+            .unwrap_or(3600);
         let item_size = std::env::var("AUTODESC_ITEM_CACHE_SIZE")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
@@ -47,18 +93,29 @@ impl AppState {
         let output_ttl = std::env::var("AUTODESC_OUTPUT_CACHE_TTL_SECS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(600); // 10 minutes
+            .unwrap_or(600);
         let output_size = std::env::var("AUTODESC_OUTPUT_CACHE_SIZE")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(1_000);
+
+        let rate_limit = std::env::var("AUTODESC_RATE_LIMIT")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(100);
+        let rate_window = std::env::var("AUTODESC_RATE_WINDOW_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(10);
 
         tracing::info!(
             item_ttl,
             item_size,
             output_ttl,
             output_size,
-            "Cache configuration"
+            rate_limit,
+            rate_window,
+            "Cache and rate-limit configuration"
         );
 
         Self {
@@ -70,15 +127,19 @@ impl AppState {
                 .max_capacity(output_size)
                 .time_to_live(Duration::from_secs(output_ttl))
                 .build(),
+            rate_limiter: IpRateLimiter::new(rate_limit, rate_window),
+            start_time: Instant::now(),
         }
     }
 }
 
-const DEFAULT_LANGUAGE: &str = "en";
+// ── Constants ──────────────────────────────────────────────────────────────
 
+const DEFAULT_LANGUAGE: &str = "en";
 const INDEX_HTML: &str = include_str!("../../data/index.html");
 
-/// Query parameters matching the Python Flask API.
+// ── Query parameters ───────────────────────────────────────────────────────
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ApiParams {
     #[serde(default)]
@@ -126,7 +187,106 @@ fn default_user_zoom() -> u32 {
     4
 }
 
-/// JSON response matching the Python API output.
+// ── Validation ─────────────────────────────────────────────────────────────
+
+struct ValidationErrors {
+    errors: Vec<String>,
+}
+
+impl ValidationErrors {
+    fn new() -> Self {
+        Self { errors: Vec::new() }
+    }
+    fn push(&mut self, msg: impl Into<String>) {
+        self.errors.push(msg.into());
+    }
+    fn is_empty(&self) -> bool {
+        self.errors.is_empty()
+    }
+}
+
+fn validate_params(params: &ApiParams) -> Result<(), ValidationErrors> {
+    let mut errs = ValidationErrors::new();
+
+    if let Some(ref q) = params.q
+        && !q.is_empty()
+        && !validation::validate_qid(q)
+    {
+        errs.push(format!(
+            "Invalid Q-id: '{}'. Expected format: Q followed by digits.",
+            q
+        ));
+    }
+
+    if !validation::validate_lang(&params.lang) {
+        errs.push(format!("Invalid language: '{}'", params.lang));
+    }
+
+    if !validation::validate_mode(&params.mode) {
+        errs.push(format!(
+            "Invalid mode: '{}'. Allowed: short, long",
+            params.mode
+        ));
+    }
+
+    if !validation::validate_links(&params.links) {
+        errs.push(format!(
+            "Invalid links: '{}'. Allowed: text, wikidata, wiki, wikipedia, reasonator",
+            params.links
+        ));
+    }
+
+    if !validation::validate_format(&params.format) {
+        errs.push(format!(
+            "Invalid format: '{}'. Allowed: json, jsonfm, html",
+            params.format
+        ));
+    }
+
+    if let Some(ref callback) = params.callback
+        && !callback.is_empty()
+        && !validation::validate_jsonp_callback(callback)
+    {
+        errs.push(format!(
+            "Invalid JSONP callback: '{}'. Must be a valid JavaScript identifier.",
+            callback
+        ));
+    }
+
+    for (name, value) in &[
+        ("lang", &params.lang),
+        ("mode", &params.mode),
+        ("links", &params.links),
+        ("format", &params.format),
+        ("redlinks", &params.redlinks),
+        ("get_infobox", &params.get_infobox),
+        ("infobox_template", &params.infobox_template),
+        ("media", &params.media),
+        ("thumb", &params.thumb),
+    ] {
+        if !validation::validate_param_length(value) {
+            errs.push(format!(
+                "Parameter '{}' value too long (max 512 chars)",
+                name
+            ));
+        }
+    }
+
+    if !params.thumb.is_empty() {
+        if let Ok(t) = params.thumb.parse::<u64>() {
+            if t > 4096 {
+                errs.push("Thumbnail size must be ≤ 4096px".to_string());
+            }
+        } else {
+            errs.push(format!("Invalid thumbnail size: '{}'", params.thumb));
+        }
+    }
+
+    if errs.is_empty() { Ok(()) } else { Err(errs) }
+}
+
+// ── Response types ─────────────────────────────────────────────────────────
+
 #[derive(Debug, Serialize)]
 struct ApiResponse {
     call: Value,
@@ -140,7 +300,28 @@ struct ApiResponse {
     thumbnails: Option<Value>,
 }
 
-/// Build a response from a cached JSON string, applying the requested format.
+// ── Response rendering ─────────────────────────────────────────────────────
+
+fn error_json(status: StatusCode, msg: &str) -> Response {
+    let body = json!({ "error": msg });
+    (
+        status,
+        [("content-type", "application/json; charset=utf-8")],
+        body.to_string(),
+    )
+        .into_response()
+}
+
+fn error_json_multi(status: StatusCode, msg: &str, errors: &[String]) -> Response {
+    let body = json!({ "error": msg, "errors": errors });
+    (
+        status,
+        [("content-type", "application/json; charset=utf-8")],
+        body.to_string(),
+    )
+        .into_response()
+}
+
 fn cached_response(cached_json: String, args: &ApiParams) -> Response {
     match args.format.as_str() {
         "html" => {
@@ -204,30 +385,56 @@ fn cached_response(cached_json: String, args: &ApiParams) -> Response {
     }
 }
 
-async fn api_handler(State(state): State<AppState>, Query(params): Query<ApiParams>) -> Response {
+// ── Handlers ───────────────────────────────────────────────────────────────
+
+async fn health_handler(State(state): State<AppState>) -> Json<Value> {
+    let uptime = state.start_time.elapsed().as_secs();
+    Json(json!({
+        "status": "ok",
+        "uptime_secs": uptime,
+    }))
+}
+
+async fn api_handler(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Query(params): Query<ApiParams>,
+) -> Response {
+    // Rate limiting
+    if !state.rate_limiter.check(addr.ip()).await {
+        return error_json(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Rate limit exceeded. Please slow down.",
+        );
+    }
+
+    // Input validation
+    if let Err(validation_errors) = validate_params(&params) {
+        return error_json_multi(
+            StatusCode::BAD_REQUEST,
+            "Invalid request parameters",
+            &validation_errors.errors,
+        );
+    }
+
     let mut args = params.clone();
 
-    // Normalize language
     if args.lang == "any" || args.lang.is_empty() {
         args.lang = DEFAULT_LANGUAGE.to_string();
     }
 
-    // For HTML output with media enabled, default to a 200px thumbnail so images are visible.
     if args.format == "html" && args.media == "1" && args.thumb.is_empty() {
         args.thumb = "200".to_string();
     }
 
-    // If no Q is provided, return the index HTML
     let q_raw = match &args.q {
         Some(q) if !q.is_empty() => q.clone(),
         _ => return Html(INDEX_HTML.to_string()).into_response(),
     };
 
-    // Normalize Q-id (handles pure digits, mixed case, leading/trailing whitespace).
     let q = sanitize_q(&q_raw);
     args.q = Some(q.clone());
 
-    // Build output cache key from all params that affect the result.
     let output_key = format!(
         "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
         q,
@@ -242,12 +449,10 @@ async fn api_handler(State(state): State<AppState>, Query(params): Query<ApiPara
         args.user_zoom,
     );
 
-    // Return cached output if available.
     if let Some(cached) = state.output_cache.get(&output_key).await {
         return cached_response(cached, &args);
     }
 
-    // Build description options
     let mut opt = DescOptions {
         q: q.clone(),
         lang: args.lang.clone(),
@@ -256,14 +461,11 @@ async fn api_handler(State(state): State<AppState>, Query(params): Query<ApiPara
         ..Default::default()
     };
 
-    // Create a WikiData client backed by the shared item cache.
     let mut wd = WikiData::new().with_item_cache(state.item_cache.clone());
     let sd = ShortDescription::global();
 
-    // Generate description
     let (_result_q, output) = sd.load_item(&q, &mut opt, &mut wd).await;
 
-    // Get label and manual description
     let label = wd
         .get_item(&q)
         .map(|i| i.get_label(Some(&args.lang)))
@@ -274,7 +476,6 @@ async fn api_handler(State(state): State<AppState>, Query(params): Query<ApiPara
         .map(|i| i.get_desc(Some(&args.lang)))
         .unwrap_or_default();
 
-    // Build the call object for the response
     let call = json!({
         "q": args.q,
         "lang": args.lang,
@@ -302,15 +503,12 @@ async fn api_handler(State(state): State<AppState>, Query(params): Query<ApiPara
 
     add_media(&args, &q, wd, &mut response).await;
 
-    // Serialize the response and store in the output cache, but skip caching
-    // error results so they can be retried on the next request.
     let cached_json = serde_json::to_string(&response).unwrap_or_default();
     let cannot_describe = format!("<i>{}</i>", sd.txt("cannot_describe", &args.lang));
     if response.result != cannot_describe {
         state.output_cache.insert(output_key, cached_json).await;
     }
 
-    // Format the response
     match args.format.as_str() {
         "html" => render_html(&args, q, label, &response),
         "jsonfm" => render_jsonfm(&args, &response),
@@ -319,7 +517,6 @@ async fn api_handler(State(state): State<AppState>, Query(params): Query<ApiPara
 }
 
 async fn add_media(args: &ApiParams, q: &str, mut wd: WikiData, response: &mut ApiResponse) {
-    // Handle media generation
     if args.media == "1" {
         let media_result =
             MediaGenerator::generate_media(q, &args.thumb, args.user_zoom, &mut wd).await;
@@ -335,11 +532,9 @@ async fn add_media(args: &ApiParams, q: &str, mut wd: WikiData, response: &mut A
     }
 }
 
-fn render_json(args: ApiParams, response: ApiResponse) -> axum::http::Response<axum::body::Body> {
-    // "json" or anything else (default)
+fn render_json(args: ApiParams, response: ApiResponse) -> Response {
     let json_str = serde_json::to_string(&response).unwrap_or_default();
 
-    // Support JSONP callback
     if let Some(ref callback) = args.callback
         && !callback.is_empty()
     {
@@ -360,14 +555,9 @@ fn render_json(args: ApiParams, response: ApiResponse) -> axum::http::Response<a
         .into_response()
 }
 
-fn render_jsonfm(
-    args: &ApiParams,
-    response: &ApiResponse,
-) -> axum::http::Response<axum::body::Body> {
-    // Pretty-printed JSON in an HTML wrapper
+fn render_jsonfm(args: &ApiParams, response: &ApiResponse) -> Response {
     let json_text = serde_json::to_string_pretty(response).unwrap_or_default();
 
-    // Build a link to the JSON version
     let mut json_params: Vec<String> = Vec::new();
     if let Some(ref q_val) = args.q {
         json_params.push(format!("q={}", html_escape::encode_text(q_val)));
@@ -397,8 +587,6 @@ fn render_jsonfm(
     Html(html).into_response()
 }
 
-/// Returns `(thumburl, descriptionurl)` for the first available thumbnail in the response,
-/// trying image types in priority order.
 fn first_thumbnail(response: &ApiResponse) -> Option<(String, String)> {
     let thumbnails = response.thumbnails.as_ref()?.as_object()?;
     let media = response.media.as_ref()?.as_object()?;
@@ -431,12 +619,7 @@ fn first_thumbnail(response: &ApiResponse) -> Option<(String, String)> {
     None
 }
 
-fn render_html(
-    args: &ApiParams,
-    q: String,
-    label: String,
-    response: &ApiResponse,
-) -> axum::http::Response<axum::body::Body> {
+fn render_html(args: &ApiParams, q: String, label: String, response: &ApiResponse) -> Response {
     let mut html = String::from("<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body>");
     html.push_str("<style>a.redlink { color:red }</style>");
     html.push_str(&format!(
@@ -471,9 +654,10 @@ fn render_html(
     Html(html).into_response()
 }
 
+// ── Main ───────────────────────────────────────────────────────────────────
+
 #[tokio::main]
 async fn main() {
-    // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -497,15 +681,42 @@ async fn main() {
 
     tracing::info!(timeout_sec, "Timeout limit");
 
+    // Security headers
+    let security_headers = vec![
+        (
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ),
+        (header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY")),
+        (
+            header::X_XSS_PROTECTION,
+            HeaderValue::from_static("1; mode=block"),
+        ),
+        (
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("strict-origin-when-cross-origin"),
+        ),
+    ];
+
     let app = Router::new()
         .route("/", get(api_handler))
-        .with_state(state)
+        .route("/health", get(health_handler))
+        .with_state(state);
+
+    let app = security_headers
+        .into_iter()
+        .fold(app, |router, (name, value)| {
+            router.layer(SetResponseHeaderLayer::if_not_present(name, value))
+        });
+
+    let app = app
+        .layer(RequestBodyLimitLayer::new(8192))
         .layer(CompressionLayer::new())
         .layer(SetResponseHeaderLayer::if_not_present(
             header::CACHE_CONTROL,
             HeaderValue::from_static("public, max-age=3600"),
         ))
-        .layer(CorsLayer::permissive())
+        .layer(build_cors_layer())
         .layer(TimeoutLayer::new(Duration::from_secs(timeout_sec)))
         .layer(
             ServiceBuilder::new()
@@ -532,9 +743,48 @@ async fn main() {
         .await
         .expect("Failed to bind address");
 
-    axum::serve(listener, app).await.expect("Server error");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .expect("Server error");
 }
 
-/*
-toolforge webservice buildservice stop; toolforge webservice buildservice start --mount=none --mem 5Gi --cpu 3
- */
+fn build_cors_layer() -> CorsLayer {
+    CorsLayer::new()
+        .allow_methods([Method::GET])
+        .allow_headers([header::ACCEPT, header::ACCEPT_LANGUAGE])
+        .allow_origin([
+            HeaderValue::from_static("https://autodesc.toolforge.org"),
+            HeaderValue::from_static("https://www.wikidata.org"),
+            HeaderValue::from_static("https://wikidata.org"),
+        ])
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    tracing::info!("Shutdown signal received, starting graceful shutdown...");
+}
