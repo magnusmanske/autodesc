@@ -16,7 +16,7 @@ use axum::{
     routing::get,
 };
 use moka::future::Cache;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -140,6 +140,10 @@ impl AppState {
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const DEFAULT_LANGUAGE: &str = "en";
+const DEFAULT_MODE: &str = "short";
+const DEFAULT_LINKS: &str = "text";
+const DEFAULT_GET_INFOBOX: &str = "yes";
+const DEFAULT_USER_ZOOM: u32 = 4;
 const INDEX_HTML: &str = include_str!("../../data/index.html");
 
 // ── Query parameters ───────────────────────────────────────────────────────
@@ -156,7 +160,7 @@ pub struct ApiParams {
     pub links: String,
     #[serde(default)]
     pub redlinks: String,
-    #[serde(default = "default_format")]
+    #[serde(default = "default_format", deserialize_with = "deserialize_format")]
     pub format: Format,
     #[serde(default = "default_get_infobox")]
     pub get_infobox: String,
@@ -166,7 +170,10 @@ pub struct ApiParams {
     pub media: String,
     #[serde(default)]
     pub thumb: String,
-    #[serde(default = "default_user_zoom")]
+    #[serde(
+        default = "default_user_zoom",
+        deserialize_with = "deserialize_user_zoom"
+    )]
     pub user_zoom: u32,
     #[serde(default)]
     pub callback: Option<String>,
@@ -176,19 +183,77 @@ fn default_lang() -> String {
     DEFAULT_LANGUAGE.to_string()
 }
 fn default_mode() -> String {
-    "short".to_string()
+    DEFAULT_MODE.to_string()
 }
 fn default_links() -> String {
-    "text".to_string()
+    DEFAULT_LINKS.to_string()
 }
 fn default_format() -> Format {
     Format::JsonFm
 }
 fn default_get_infobox() -> String {
-    "yes".to_string()
+    DEFAULT_GET_INFOBOX.to_string()
 }
 fn default_user_zoom() -> u32 {
-    4
+    DEFAULT_USER_ZOOM
+}
+
+// ── Parameter normalization ────────────────────────────────────────────────
+
+/// Values that clients (usually JavaScript ones) send for an unset parameter.
+///
+/// They are treated as if the parameter had been omitted entirely.
+fn is_placeholder(value: &str) -> bool {
+    matches!(value.trim(), "" | "undefined" | "null" | "NaN")
+}
+
+/// Deserializes `format`, falling back to the default for placeholder values.
+fn deserialize_format<'de, D>(deserializer: D) -> Result<Format, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    if is_placeholder(&raw) {
+        return Ok(default_format());
+    }
+    Format::parse(&raw).map_err(serde::de::Error::custom)
+}
+
+/// Deserializes `user_zoom`, falling back to the default for placeholder values.
+fn deserialize_user_zoom<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    if is_placeholder(&raw) {
+        return Ok(DEFAULT_USER_ZOOM);
+    }
+    raw.parse().map_err(serde::de::Error::custom)
+}
+
+/// Replaces placeholder parameter values with their defaults, so that e.g.
+/// `?mode=undefined` behaves exactly like an omitted `mode`.
+fn normalize_params(params: &mut ApiParams) {
+    for (value, default) in [
+        (&mut params.lang, DEFAULT_LANGUAGE),
+        (&mut params.mode, DEFAULT_MODE),
+        (&mut params.links, DEFAULT_LINKS),
+        (&mut params.get_infobox, DEFAULT_GET_INFOBOX),
+        (&mut params.redlinks, ""),
+        (&mut params.infobox_template, ""),
+        (&mut params.media, ""),
+        (&mut params.thumb, ""),
+    ] {
+        if is_placeholder(value) {
+            *value = default.to_string();
+        }
+    }
+
+    for value in [&mut params.q, &mut params.callback] {
+        if value.as_deref().is_some_and(is_placeholder) {
+            *value = None;
+        }
+    }
 }
 
 // ── Validation ─────────────────────────────────────────────────────────────
@@ -404,8 +469,11 @@ async fn api_handler(
         );
     }
 
+    let mut args = params;
+    normalize_params(&mut args);
+
     // Input validation
-    if let Err(validation_errors) = validate_params(&params) {
+    if let Err(validation_errors) = validate_params(&args) {
         return error_json_multi(
             StatusCode::BAD_REQUEST,
             "Invalid request parameters",
@@ -413,9 +481,7 @@ async fn api_handler(
         );
     }
 
-    let mut args = params.clone();
-
-    if args.lang == "any" || args.lang.is_empty() {
+    if args.lang == "any" {
         args.lang = DEFAULT_LANGUAGE.to_string();
     }
 
@@ -782,4 +848,89 @@ async fn shutdown_signal() {
     }
 
     tracing::info!("Shutdown signal received, starting graceful shutdown...");
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn params_from_query(query: &str) -> ApiParams {
+        serde_urlencoded::from_str(query).expect("query should deserialize")
+    }
+
+    #[test]
+    fn placeholders_are_recognized() {
+        for value in ["", " ", "undefined", "null", "NaN"] {
+            assert!(is_placeholder(value), "{value:?} should be a placeholder");
+        }
+        for value in ["short", "long", "0", "en"] {
+            assert!(!is_placeholder(value), "{value:?} should be a real value");
+        }
+    }
+
+    #[test]
+    fn placeholder_strings_fall_back_to_defaults() {
+        let mut params =
+            params_from_query("mode=undefined&links=null&lang=undefined&get_infobox=undefined");
+        normalize_params(&mut params);
+
+        assert_eq!(params.mode, DEFAULT_MODE);
+        assert_eq!(params.links, DEFAULT_LINKS);
+        assert_eq!(params.lang, DEFAULT_LANGUAGE);
+        assert_eq!(params.get_infobox, DEFAULT_GET_INFOBOX);
+        assert!(validate_params(&params).is_ok());
+    }
+
+    #[test]
+    fn placeholder_options_become_none() {
+        let mut params = params_from_query("q=undefined&callback=undefined");
+        normalize_params(&mut params);
+
+        assert!(params.q.is_none());
+        assert!(params.callback.is_none());
+    }
+
+    #[test]
+    fn placeholder_format_and_zoom_deserialize_to_defaults() {
+        let params = params_from_query("format=undefined&user_zoom=undefined&thumb=undefined");
+
+        assert_eq!(params.format, default_format());
+        assert_eq!(params.user_zoom, DEFAULT_USER_ZOOM);
+        assert_eq!(params.thumb, "undefined");
+    }
+
+    #[test]
+    fn placeholder_thumb_is_cleared() {
+        let mut params = params_from_query("thumb=undefined&media=undefined");
+        normalize_params(&mut params);
+
+        assert!(params.thumb.is_empty());
+        assert!(params.media.is_empty());
+        assert!(validate_params(&params).is_ok());
+    }
+
+    #[test]
+    fn real_values_are_preserved() {
+        let mut params =
+            params_from_query("q=Q42&mode=long&links=wikidata&lang=de&format=json&user_zoom=7");
+        normalize_params(&mut params);
+
+        assert_eq!(params.q.as_deref(), Some("Q42"));
+        assert_eq!(params.mode, "long");
+        assert_eq!(params.links, "wikidata");
+        assert_eq!(params.lang, "de");
+        assert_eq!(params.format, Format::Json);
+        assert_eq!(params.user_zoom, 7);
+    }
+
+    #[test]
+    fn invalid_values_are_still_rejected() {
+        let mut params = params_from_query("mode=medium");
+        normalize_params(&mut params);
+
+        let errors = validate_params(&params).expect_err("invalid mode must be rejected");
+        assert!(errors.errors.iter().any(|e| e.contains("Invalid mode")));
+    }
 }
