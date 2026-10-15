@@ -92,10 +92,10 @@ impl AppState {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(3600);
-        let item_size = std::env::var("AUTODESC_ITEM_CACHE_SIZE")
+        let item_cache_mb = std::env::var("AUTODESC_ITEM_CACHE_MB")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(10_000);
+            .unwrap_or(512);
 
         let output_ttl = std::env::var("AUTODESC_OUTPUT_CACHE_TTL_SECS")
             .ok()
@@ -117,7 +117,7 @@ impl AppState {
 
         tracing::info!(
             item_ttl,
-            item_size,
+            item_cache_mb,
             output_ttl,
             output_size,
             rate_limit,
@@ -126,8 +126,12 @@ impl AppState {
         );
 
         Self {
+            // Items vary from a few KB to tens of MB, so bound the cache by memory.
             item_cache: Cache::builder()
-                .max_capacity(item_size)
+                .weigher(|_, item: &WikiDataItem| {
+                    u32::try_from(item.heap_size()).unwrap_or(u32::MAX)
+                })
+                .max_capacity(item_cache_mb * 1024 * 1024)
                 .time_to_live(Duration::from_secs(item_ttl))
                 .build(),
             output_cache: Cache::builder()
@@ -762,7 +766,7 @@ async fn record_request(req: Request, next: Next) -> Response {
     response
 }
 
-/// Reports the cache sizes once a minute.
+/// Reports the cache sizes (and the item cache memory) once a minute.
 fn spawn_cache_size_reporter(state: &AppState) {
     let item_cache = state.item_cache.clone();
     let output_cache = state.output_cache.clone();
@@ -771,6 +775,7 @@ fn spawn_cache_size_reporter(state: &AppState) {
         loop {
             ticker.tick().await;
             cache_metrics::record_entries(cache_metrics::ITEM, item_cache.entry_count());
+            cache_metrics::record_bytes(cache_metrics::ITEM, item_cache.weighted_size());
             cache_metrics::record_entries(cache_metrics::OUTPUT, output_cache.entry_count());
         }
     });

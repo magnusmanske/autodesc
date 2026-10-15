@@ -13,6 +13,48 @@ fn unified_id(s: &str) -> String {
     s.trim().to_uppercase()
 }
 
+/// Statement fields that are never read; dropped on construction to save memory.
+/// References alone make up well over half of a large item (e.g. countries).
+const UNUSED_STATEMENT_FIELDS: &[&str] = &["references", "qualifiers-order"];
+
+/// Remove unused statement fields from an entity's claims.
+fn strip_unused(raw: &mut Value) {
+    let Some(claims) = raw.get_mut("claims").and_then(Value::as_object_mut) else {
+        return;
+    };
+    let statements = claims
+        .values_mut()
+        .filter_map(Value::as_array_mut)
+        .flatten()
+        .filter_map(Value::as_object_mut);
+    for statement in statements {
+        for field in UNUSED_STATEMENT_FIELDS {
+            statement.remove(*field);
+        }
+    }
+}
+
+/// Estimate the heap memory held by a JSON value, in bytes.
+/// Assumes serde_json's default `BTreeMap`-backed objects; nodes are counted as
+/// two-thirds full, which matches real allocations for Wikidata items to ~1%.
+fn heap_size(value: &Value) -> usize {
+    const ENTRY_SIZE: usize = std::mem::size_of::<String>() + std::mem::size_of::<Value>();
+    const NODE_SIZE: usize = 11 * ENTRY_SIZE + 16;
+    match value {
+        Value::String(s) => s.capacity(),
+        Value::Array(a) => {
+            a.capacity() * std::mem::size_of::<Value>() + a.iter().map(heap_size).sum::<usize>()
+        }
+        Value::Object(o) => {
+            o.len().div_ceil(8) * NODE_SIZE
+                + o.iter()
+                    .map(|(k, v)| k.capacity() + heap_size(v))
+                    .sum::<usize>()
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => 0,
+    }
+}
+
 /// Represents a single Wikidata entity with helper methods for extracting data.
 ///
 /// `raw` is wrapped in `Arc` so that cloning a `WikiDataItem` (e.g. between the
@@ -22,22 +64,30 @@ fn unified_id(s: &str) -> String {
 pub struct WikiDataItem {
     pub raw: Arc<Value>,
     placeholder: bool,
+    heap_size: usize,
 }
 
 impl WikiDataItem {
-    pub fn new(raw: Value) -> Self {
+    /// Wraps an entity, dropping statement data that is never used (see `UNUSED_STATEMENT_FIELDS`).
+    pub fn new(mut raw: Value) -> Self {
+        strip_unused(&mut raw);
         let placeholder = raw.is_null();
+        let heap_size = heap_size(&raw);
         Self {
             raw: Arc::new(raw),
             placeholder,
+            heap_size,
         }
     }
 
     pub fn placeholder() -> Self {
-        Self {
-            raw: Arc::new(Value::Null),
-            placeholder: true,
-        }
+        Self::new(Value::Null)
+    }
+
+    /// Approximate heap memory held by this item's JSON, in bytes.
+    /// Used to bound the item cache by memory rather than by entry count.
+    pub fn heap_size(&self) -> usize {
+        self.heap_size
     }
 
     pub fn is_placeholder(&self) -> bool {
@@ -357,6 +407,7 @@ impl WikiDataItem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_placeholder() {
@@ -370,6 +421,38 @@ mod tests {
         assert!(item.get_claim_items_for_property("P31").is_empty());
         assert!(item.get_strings_for_property("P18").is_empty());
         assert!(item.get_wiki_links().is_empty());
+    }
+
+    fn item_with_referenced_claim() -> WikiDataItem {
+        WikiDataItem::new(json!({
+            "claims": {
+                "P27": [{
+                    "mainsnak": { "datavalue": { "value": { "entity-type": "item", "id": "Q183" } } },
+                    "qualifiers": { "P580": [{ "datavalue": { "value": { "time": "+1990-00-00T00:00:00Z" } } }] },
+                    "qualifiers-order": ["P580"],
+                    "references": [{ "snaks": { "P248": [{ "datavalue": { "value": { "id": "Q36578" } } }] } }]
+                }]
+            }
+        }))
+    }
+
+    #[test]
+    fn test_new_strips_unused_statement_fields() {
+        let item = item_with_referenced_claim();
+        let claim = &item.claims_slice("P27")[0];
+        assert!(claim.get("references").is_none());
+        assert!(claim.get("qualifiers-order").is_none());
+        assert!(claim.get("qualifiers").is_some());
+        assert_eq!(item.get_claim_items_for_property("P27"), vec!["Q183"]);
+    }
+
+    #[test]
+    fn test_heap_size() {
+        assert_eq!(WikiDataItem::placeholder().heap_size(), 0);
+        let small = WikiDataItem::new(json!({ "id": "Q1" }));
+        let large = item_with_referenced_claim();
+        assert!(small.heap_size() > 0);
+        assert!(large.heap_size() > small.heap_size());
     }
 
     #[test]

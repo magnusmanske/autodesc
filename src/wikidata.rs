@@ -6,7 +6,9 @@ use std::time::Duration;
 use moka::future::Cache;
 use regex::Regex;
 use reqwest::Client;
+use serde::Deserialize;
 use serde_json::Value;
+use serde_json::value::RawValue;
 use tokio::sync::Semaphore;
 
 use crate::cache_metrics;
@@ -97,6 +99,14 @@ where
         }
     }
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Retry exhausted with no error")))
+}
+
+/// A `wbgetentities` response. Entities stay unparsed until needed, so only one
+/// full entity (which can take tens of MB as a `Value`) is in memory at a time.
+#[derive(Deserialize)]
+struct EntitiesResponse {
+    #[serde(default)]
+    entities: HashMap<String, Box<RawValue>>,
 }
 
 /// The main Wikidata client that fetches and caches entities.
@@ -230,23 +240,21 @@ impl WikiData {
                     .query(&params)
                     .send()
                     .await?
-                    .json::<Value>()
+                    .json::<EntitiesResponse>()
                     .await?;
                 Ok(resp)
             }
         })
         .await?;
 
-        if let Some(entities) = resp.get("entities").and_then(|e| e.as_object()) {
-            for (k, v) in entities {
-                let q = QId::from_api_key(k);
-                let item = WikiDataItem::new(v.clone());
-                // Populate global item cache with freshly loaded items.
-                if let Some(cache) = &self.item_cache {
-                    cache.insert(q.clone(), item.clone()).await;
-                }
-                self.items.insert(q, item);
+        for (k, raw) in resp.entities {
+            let q = QId::from_api_key(&k);
+            let item = WikiDataItem::new(serde_json::from_str(raw.get())?);
+            // Populate global item cache with freshly loaded items.
+            if let Some(cache) = &self.item_cache {
+                cache.insert(q.clone(), item.clone()).await;
             }
+            self.items.insert(q, item);
         }
         Ok(())
     }

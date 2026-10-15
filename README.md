@@ -23,7 +23,7 @@ By default it listens on `0.0.0.0:8000`. Override with environment variables:
 | `AUTODESC_ADDRESS` | `0.0.0.0` | Bind address |
 | `AUTODESC_PORT` | `8000` | Bind port |
 | `AUTODESC_ITEM_CACHE_TTL_SECS` | `3600` | How long to cache Wikidata items (seconds) |
-| `AUTODESC_ITEM_CACHE_SIZE` | `10000` | Max number of cached items |
+| `AUTODESC_ITEM_CACHE_MB` | `512` | Memory budget for cached items (MiB) |
 | `AUTODESC_OUTPUT_CACHE_TTL_SECS` | `600` | How long to cache generated descriptions (seconds) |
 | `AUTODESC_OUTPUT_CACHE_SIZE` | `1000` | Max number of cached output strings |
 | `AUTODESC_MAX_CONCURRENCY` | `5000` | Max concurrent requests |
@@ -143,7 +143,11 @@ let result = LongDescGenerator::generate(&sd, "Q42", &claims, &opt, &mut wd).awa
 ```rust
 use moka::future::Cache;
 
-let shared_cache = Cache::builder().max_capacity(10_000).build();
+// Weigh items by their memory footprint; a large item can take tens of MB.
+let shared_cache = Cache::builder()
+    .weigher(|_, item: &WikiDataItem| u32::try_from(item.heap_size()).unwrap_or(u32::MAX))
+    .max_capacity(512 * 1024 * 1024)
+    .build();
 let wd = WikiData::new().with_item_cache(shared_cache);
 ```
 

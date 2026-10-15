@@ -16,3 +16,8 @@ pub fn record_lookup(cache: &'static str, hit: bool) {
 pub fn record_entries(cache: &'static str, entries: u64) {
     wikimisc::metrics::gauge!("autodesc_cache_entries", "cache" => cache).set(entries as f64);
 }
+
+/// Sets `autodesc_cache_bytes{cache}`, the estimated memory held by a weighted cache.
+pub fn record_bytes(cache: &'static str, bytes: u64) {
+    wikimisc::metrics::gauge!("autodesc_cache_bytes", "cache" => cache).set(bytes as f64);
+}
