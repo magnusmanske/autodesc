@@ -1,5 +1,6 @@
 use autodesc::Format;
 use autodesc::Lang;
+use autodesc::cache_metrics;
 use autodesc::desc_options::DescOptions;
 use autodesc::lang_type;
 use autodesc::media::MediaGenerator;
@@ -10,8 +11,9 @@ use autodesc::wikidata::{WikiData, WikiDataItem};
 use axum::{
     Router,
     error_handling::HandleErrorLayer,
-    extract::{ConnectInfo, Query, State},
+    extract::{ConnectInfo, Query, Request, State},
     http::{HeaderValue, StatusCode, header},
+    middleware::{self, Next},
     response::{Html, IntoResponse, Json, Response},
     routing::get,
 };
@@ -19,7 +21,7 @@ use moka::future::Cache;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tower::BoxError;
@@ -29,6 +31,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::set_header::response::SetResponseHeaderLayer;
 use tower_http::timeout::TimeoutLayer;
+use wikimisc::telemetry::{ExitReason, Telemetry, TelemetryError};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -515,7 +518,9 @@ async fn api_handler(
         args.user_zoom,
     );
 
-    if let Some(cached) = state.output_cache.get(&output_key).await {
+    let cached = state.output_cache.get(&output_key).await;
+    cache_metrics::record_lookup(cache_metrics::OUTPUT, cached.is_some());
+    if let Some(cached) = cached {
         return cached_response(cached, &args);
     }
 
@@ -720,6 +725,57 @@ fn render_html(args: &ApiParams, q: String, label: String, response: &ApiRespons
     Html(html).into_response()
 }
 
+// ── Telemetry ──────────────────────────────────────────────────────────────
+
+/// Starts pushing metrics to the service dashboard (token from `$DASHBOARD_TOKEN`).
+/// Telemetry is optional: a missing token or any other error only gets logged.
+/// Signals are left to the graceful shutdown, which sends the final push.
+fn start_telemetry() -> bool {
+    match Telemetry::builder("web")
+        .version(env!("CARGO_PKG_VERSION"))
+        .handle_signals(false)
+        .install()
+    {
+        Ok(_) => {
+            tracing::info!("telemetry enabled");
+            true
+        }
+        Err(e @ TelemetryError::NoToken) => {
+            tracing::info!("telemetry disabled: {e}");
+            false
+        }
+        Err(e) => {
+            tracing::warn!("telemetry disabled: {e}");
+            false
+        }
+    }
+}
+
+/// Records each request for the service dashboard; health checks are left out.
+async fn record_request(req: Request, next: Next) -> Response {
+    if req.uri().path() == "/health" {
+        return next.run(req).await;
+    }
+    let start = Instant::now();
+    let response = next.run(req).await;
+    wikimisc::telemetry::record_http_request(response.status().as_u16(), start.elapsed());
+    response
+}
+
+/// Reports the cache sizes once a minute.
+fn spawn_cache_size_reporter(state: &AppState) {
+    let item_cache = state.item_cache.clone();
+    let output_cache = state.output_cache.clone();
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            ticker.tick().await;
+            cache_metrics::record_entries(cache_metrics::ITEM, item_cache.entry_count());
+            cache_metrics::record_entries(cache_metrics::OUTPUT, output_cache.entry_count());
+        }
+    });
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -734,6 +790,9 @@ async fn main() {
     lang_type::init_langs().await;
 
     let state = AppState::new();
+    if start_telemetry() {
+        spawn_cache_size_reporter(&state);
+    }
 
     let max_concurrency = std::env::var("AUTODESC_MAX_CONCURRENCY")
         .ok()
@@ -793,7 +852,9 @@ async fn main() {
                 }))
                 .load_shed()
                 .concurrency_limit(max_concurrency),
-        );
+        )
+        // Outermost, so load shedding (503) and timeouts (408) are recorded too.
+        .layer(middleware::from_fn(record_request));
 
     let address = std::env::var("AUTODESC_ADDRESS")
         .ok()
@@ -811,20 +872,27 @@ async fn main() {
         .await
         .expect("Failed to bind address");
 
+    // Which signal ended the server, for the final telemetry push.
+    let signal = Arc::new(OnceLock::new());
+    let received = Arc::clone(&signal);
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown(async move { _ = received.set(shutdown_signal().await) })
     .await
     .expect("Server error");
+
+    let signal = signal.get().copied().unwrap_or("unknown signal");
+    wikimisc::telemetry::shutdown(ExitReason::Shutdown(signal.to_string())).await;
 }
 
 fn build_cors_layer() -> CorsLayer {
     CorsLayer::permissive()
 }
 
-async fn shutdown_signal() {
+/// Waits for SIGINT or SIGTERM and returns its name.
+async fn shutdown_signal() -> &'static str {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
             .await
@@ -842,12 +910,13 @@ async fn shutdown_signal() {
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
 
-    tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
-    }
+    let signal = tokio::select! {
+        _ = ctrl_c => "SIGINT",
+        _ = terminate => "SIGTERM",
+    };
 
-    tracing::info!("Shutdown signal received, starting graceful shutdown...");
+    tracing::info!("{signal} received, starting graceful shutdown...");
+    signal
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────

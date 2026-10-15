@@ -9,6 +9,7 @@ use reqwest::Client;
 use serde_json::Value;
 use tokio::sync::Semaphore;
 
+use crate::cache_metrics;
 use crate::qid::QId;
 pub use crate::wikidata_item::{MAIN_LANGUAGES, WikiDataItem};
 
@@ -156,12 +157,14 @@ impl WikiData {
                 continue;
             }
             // Check global item cache before scheduling an API fetch.
-            if let Some(cache) = &self.item_cache
-                && let Some(item) = cache.get(&q).await
-            {
-                self.items.insert(q.clone(), item);
-                seen.insert(q);
-                continue;
+            if let Some(cache) = &self.item_cache {
+                let cached = cache.get(&q).await;
+                cache_metrics::record_lookup(cache_metrics::ITEM, cached.is_some());
+                if let Some(item) = cached {
+                    self.items.insert(q.clone(), item);
+                    seen.insert(q);
+                    continue;
+                }
             }
             seen.insert(q.clone());
             to_load.push(q);

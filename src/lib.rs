@@ -1,3 +1,4 @@
+pub mod cache_metrics;
 pub mod desc_options;
 pub mod format_type;
 pub mod lang_type;
