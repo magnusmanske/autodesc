@@ -20,7 +20,7 @@ mimalloc = { version = "0.1", features = ["secure"] }
 axum = { version = "0.7", features = ["query"] }
 tokio = { version = "1", features = ["full"] }
 tower = { version = "0.4", features = ["limit", "load-shed", "buffer"] }
-tower-http = { version = "0.5", features = ["cors", "timeout", "compression-full", "set-header", "limit", "request-id"] }
+tower-http = { version = "0.5", features = ["cors", "timeout", "compression-full", "set-header", "limit", "request-id", "catch-panic"] }
 
 # Rate limiting
 governor = "0.6"

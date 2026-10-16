@@ -26,6 +26,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tower::BoxError;
 use tower::ServiceBuilder;
+use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -813,53 +814,11 @@ async fn main() {
 
     tracing::info!(timeout_sec, "Timeout limit");
 
-    // Security headers
-    let security_headers = vec![
-        (
-            header::X_CONTENT_TYPE_OPTIONS,
-            HeaderValue::from_static("nosniff"),
-        ),
-        (header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY")),
-        (
-            header::X_XSS_PROTECTION,
-            HeaderValue::from_static("1; mode=block"),
-        ),
-        (
-            header::REFERRER_POLICY,
-            HeaderValue::from_static("strict-origin-when-cross-origin"),
-        ),
-    ];
-
     let app = Router::new()
         .route("/", get(api_handler))
         .route("/health", get(health_handler))
         .with_state(state);
-
-    let app = security_headers
-        .into_iter()
-        .fold(app, |router, (name, value)| {
-            router.layer(SetResponseHeaderLayer::if_not_present(name, value))
-        });
-
-    let app = app
-        .layer(RequestBodyLimitLayer::new(8192))
-        .layer(CompressionLayer::new())
-        .layer(SetResponseHeaderLayer::if_not_present(
-            header::CACHE_CONTROL,
-            HeaderValue::from_static("public, max-age=3600"),
-        ))
-        .layer(build_cors_layer())
-        .layer(TimeoutLayer::new(Duration::from_secs(timeout_sec)))
-        .layer(
-            ServiceBuilder::new()
-                .layer(HandleErrorLayer::new(|_: BoxError| async {
-                    StatusCode::SERVICE_UNAVAILABLE
-                }))
-                .load_shed()
-                .concurrency_limit(max_concurrency),
-        )
-        // Outermost, so load shedding (503) and timeouts (408) are recorded too.
-        .layer(middleware::from_fn(record_request));
+    let app = add_layers(app, max_concurrency, Duration::from_secs(timeout_sec));
 
     let address = std::env::var("AUTODESC_ADDRESS")
         .ok()
@@ -890,6 +849,54 @@ async fn main() {
 
     let signal = signal.get().copied().unwrap_or("unknown signal");
     wikimisc::telemetry::shutdown(ExitReason::Shutdown(signal.to_string())).await;
+}
+
+/// Wraps the routes in the middleware stack (listed innermost first).
+fn add_layers(app: Router, max_concurrency: usize, timeout: Duration) -> Router {
+    let security_headers = [
+        (
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ),
+        (header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY")),
+        (
+            header::X_XSS_PROTECTION,
+            HeaderValue::from_static("1; mode=block"),
+        ),
+        (
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("strict-origin-when-cross-origin"),
+        ),
+    ];
+    let app = security_headers
+        .into_iter()
+        .fold(app, |router, (name, value)| {
+            router.layer(SetResponseHeaderLayer::if_not_present(name, value))
+        });
+
+    app.layer(RequestBodyLimitLayer::new(8192))
+        .layer(CompressionLayer::new())
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=3600"),
+        ))
+        // Turns a panicking handler into a 500 instead of a dropped connection.
+        // Outside the cache header, so the error is not cached for an hour;
+        // inside CORS, so browser clients can still read the status.
+        .layer(CatchPanicLayer::new())
+        .layer(build_cors_layer())
+        .layer(TimeoutLayer::new(timeout))
+        .layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(|_: BoxError| async {
+                    StatusCode::SERVICE_UNAVAILABLE
+                }))
+                .load_shed()
+                .concurrency_limit(max_concurrency),
+        )
+        // Outermost, so load shedding (503), timeouts (408) and panics (500)
+        // are recorded too.
+        .layer(middleware::from_fn(record_request))
 }
 
 fn build_cors_layer() -> CorsLayer {
@@ -1006,5 +1013,34 @@ mod tests {
 
         let errors = validate_params(&params).expect_err("invalid mode must be rejected");
         assert!(errors.errors.iter().any(|e| e.contains("Invalid mode")));
+    }
+
+    #[tokio::test]
+    async fn panicking_handler_returns_500() {
+        use tower::Service;
+
+        async fn boom() -> &'static str {
+            panic!("test panic")
+        }
+        let mut app = add_layers(
+            Router::new().route("/", get(boom)),
+            1,
+            Duration::from_secs(5),
+        )
+        .into_service();
+        let request = Request::builder()
+            .uri("/")
+            .body(axum::body::Body::empty())
+            .expect("valid request");
+
+        std::future::poll_fn(|cx| app.poll_ready(cx))
+            .await
+            .expect("router is always ready");
+        let response = app.call(request).await.expect("infallible");
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let headers = response.headers();
+        assert!(headers.contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN));
+        assert!(!headers.contains_key(header::CACHE_CONTROL));
     }
 }
