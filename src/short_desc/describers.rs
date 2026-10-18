@@ -30,6 +30,27 @@ fn taxon_rank_index(q: &str) -> Option<usize> {
     }
 }
 
+/// The ancestry of taxon `q` (itself included): each taxon with its rank,
+/// scientific name (P225) and label in `lang`, if it has one.
+fn taxon_query(q: &str, lang: &str) -> String {
+    format!(
+        r#"SELECT ?taxon ?taxonRank ?taxonLabel ?taxonName {{
+  wd:{q} wdt:P171* ?taxon .
+  ?taxon wdt:P171 ?parentTaxon ; wdt:P225 ?taxonName ; wdt:P105 ?taxonRank .
+  OPTIONAL {{ ?taxon rdfs:label ?taxonLabel FILTER(LANG(?taxonLabel) = "{lang}") }}
+}}"#
+    )
+}
+
+/// Whether a row of [`taxon_query`] names the taxon other than by its
+/// scientific name: by a common name, or not at all in this language — which
+/// is how the label service's QID fallback behaved, and since the scientific
+/// names moved to `mul` labels, what picks out e.g. a genus.
+fn label_differs_from_name(binding: &serde_json::Value) -> bool {
+    let value = |var: &str| binding[var]["value"].as_str().unwrap_or("").to_lowercase();
+    value("taxonLabel") != value("taxonName")
+}
+
 impl ShortDescription {
     /// Generate a description for a person.
     pub(super) async fn describe_person(
@@ -258,22 +279,13 @@ impl ShortDescription {
         opt: &DescOptions,
         wd: &mut WikiData,
     ) -> (String, String) {
-        let sparql = format!(
-            "SELECT ?taxon ?taxonRank ?taxonRankLabel ?parentTaxon ?taxonLabel ?taxonName {{ wd:{q} \
-             wdt:P171* ?taxon . ?taxon wdt:P171 ?parentTaxon . ?taxon wdt:P225 ?taxonName . ?taxon wdt:P105 ?taxonRank . \
-             SERVICE wikibase:label {{ bd:serviceParam wikibase:language \"[AUTO_LANGUAGE],{lang}\". }} }}",
-            q = q,
-            lang = opt.lang
-        );
-
-        let url = format!(
-            "https://query.wikidata.org/bigdata/namespace/wdq/sparql?format=json&query={}",
-            urlencoding::encode(&sparql)
-        );
-
-        let body = match wd.get_json(&url).await {
-            Ok(v) => v,
-            Err(_) => return self.describe_generic(q, claims, opt, wd).await,
+        let sparql = taxon_query(q, opt.lang.as_str());
+        let body = match crate::sparql::client() {
+            Ok(client) => client.query_json(&sparql).await.ok(),
+            Err(_) => None,
+        };
+        let Some(body) = body else {
+            return self.describe_generic(q, claims, opt, wd).await;
         };
 
         let bindings = body
@@ -330,18 +342,7 @@ impl ShortDescription {
         }
 
         for binding in taxa_cache.iter().flatten() {
-            let taxon_label = binding
-                .get("taxonLabel")
-                .and_then(|t| t.get("value"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let taxon_name_val = binding
-                .get("taxonName")
-                .and_then(|t| t.get("value"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-
-            if taxon_label.to_lowercase() != taxon_name_val.to_lowercase() {
+            if label_differs_from_name(binding) {
                 let taxon_q = entity_re
                     .replace_all(
                         binding
@@ -700,5 +701,33 @@ impl ShortDescription {
         Self::add_items_from_claims(claims, 463, &mut load_items); // member of
         Self::add_items_from_claims(claims, 800, &mut load_items); // notable work
         load_items
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(label: Option<&str>, name: &str) -> serde_json::Value {
+        let mut row = serde_json::json!({ "taxonName": { "value": name } });
+        if let Some(label) = label {
+            row["taxonLabel"] = serde_json::json!({ "value": label });
+        }
+        row
+    }
+
+    #[test]
+    fn a_missing_label_differs_from_the_name_as_the_qid_used_to() {
+        assert!(label_differs_from_name(&row(Some("insects"), "Insecta")));
+        assert!(!label_differs_from_name(&row(Some("insecta"), "Insecta")));
+        assert!(label_differs_from_name(&row(None, "Insecta")));
+    }
+
+    #[test]
+    fn the_taxon_query_is_plain_sparql_in_the_requested_language() {
+        let query = taxon_query("Q140", "de");
+        assert!(query.contains("wd:Q140 wdt:P171* ?taxon"), "{query}");
+        assert!(query.contains(r#"LANG(?taxonLabel) = "de""#), "{query}");
+        assert!(!query.contains("SERVICE"), "{query}");
     }
 }

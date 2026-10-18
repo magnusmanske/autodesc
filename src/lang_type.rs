@@ -129,25 +129,11 @@ fn hardcoded_langs() -> HashSet<String> {
 }
 
 async fn fetch_langs_from_sparql() -> Result<HashSet<String>, anyhow::Error> {
-    let client = reqwest::Client::builder()
-        .user_agent("autodesc/0.2.0 (https://github.com/magnusmanske/autodesc)")
-        .timeout(std::time::Duration::from_secs(15))
-        .build()?;
+    /// Startup waits for this, and the fallback list is good enough.
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
     let query = "SELECT ?code WHERE { ?lang wdt:P31 wd:Q34770. ?lang wdt:P218 ?code. }";
-    let url = format!(
-        "https://query.wikidata.org/sparql?format=json&query={}",
-        urlencoding::encode(query)
-    );
-
-    let resp: serde_json::Value = client
-        .get(&url)
-        .header("Accept", "application/json")
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    let resp = tokio::time::timeout(TIMEOUT, crate::sparql::client()?.query_json(query)).await??;
 
     let mut langs = HashSet::new();
     if let Some(bindings) = resp
