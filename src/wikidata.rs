@@ -523,6 +523,39 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn test_wikidata_item_methods() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(fake_wbgetentities(fake_q12345())),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
+        wd.load_entity("Q12345").await.unwrap();
+        let item = wd.get_item(&QId::parse("Q12345").unwrap()).unwrap();
+
+        assert_eq!(item.get_id(), "Q12345");
+        assert!(item.is_item());
+        assert!(item.has_claims("P31"));
+        assert!(!item.has_claims("P21"));
+        assert_eq!(item.get_claim_items_for_property("P31"), vec!["Q30061417"]);
+        assert_eq!(item.get_label(Some("de")), "Graf Zahl");
+        assert_eq!(item.get_label(Some("xx")), "Q12345");
+        assert_eq!(item.get_label(None), "Count von Count");
+        assert_eq!(item.get_desc(Some("en")), "Sesame Street character");
+        assert_eq!(item.get_desc(Some("de")), "");
+        assert_eq!(item.get_desc(None), "Sesame Street character");
+
+        let links = item.get_wiki_links();
+        assert_eq!(links.len(), 2);
+        assert!(links.contains_key("dewiki"));
+        assert!(links.contains_key("enwiki"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_batch_loading() {
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))

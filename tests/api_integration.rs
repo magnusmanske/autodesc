@@ -366,48 +366,6 @@ async fn test_media_generation_location() {
     }
 }
 
-/// Test WikiData item methods.
-#[tokio::test(flavor = "multi_thread")]
-async fn test_wikidata_item_methods() {
-    let mut wd = WikiData::new();
-    wd.load_entity("Q12345").await.unwrap();
-
-    let item = wd.get_item(&QId::parse("Q12345").unwrap()).unwrap();
-
-    // Test get_id
-    assert_eq!(item.get_id(), "Q12345");
-
-    // Test is_item
-    assert!(item.is_item());
-
-    // Test has_claims for known properties
-    assert!(item.has_claims("P31"), "Q12345 should have P31 claims");
-
-    // Test get_claim_items_for_property
-    let p31_items = item.get_claim_items_for_property("P31");
-    assert!(!p31_items.is_empty(), "Should have instance-of items");
-
-    // Test get_label
-    let label = item.get_label(Some("en"));
-    assert!(!label.is_empty(), "English label should exist");
-
-    // Test get_label with no language (fallback)
-    let label_any = item.get_label(None);
-    assert!(!label_any.is_empty(), "Fallback label should exist");
-
-    // Test get_desc
-    let desc = item.get_desc(Some("en"));
-    // Desc might or might not exist, just verify it doesn't panic
-    let _ = desc;
-
-    // Test get_wiki_links
-    let links = item.get_wiki_links();
-    assert!(
-        links.contains_key("dewiki"),
-        "Q12345 (Count von Count) should have a dewiki sitelink"
-    );
-}
-
 /// Test that batch loading works correctly and deduplicates.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_batch_loading_dedup() {
