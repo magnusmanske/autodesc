@@ -1,6 +1,5 @@
 use serde_json::Value;
 
-use crate::qid::QId;
 use crate::short_desc::ShortDescription;
 use crate::wikidata::WikiData;
 
@@ -78,7 +77,7 @@ impl LangGenerator for LangFr {
             let sep = get_sep_after_fr(occupations.len(), k);
             if (state.is_female || state.is_male)
                 && let Some(gendered) = wd
-                    .get_item(&QId::parse(occ_q).unwrap())
+                    .get_item_str(occ_q)
                     .and_then(|i| i.get_gendered_label(&state.lang, state.is_female))
             {
                 state.push_text(&gendered);
@@ -92,7 +91,7 @@ impl LangGenerator for LangFr {
         let nationalities = get_claim_item_ids(claims, "P27");
         for (k, country_q) in nationalities.iter().enumerate() {
             let country_label = wd
-                .get_item(&QId::parse(country_q).unwrap())
+                .get_item_str(country_q)
                 .map(|i| i.get_label(Some(&state.lang)))
                 .unwrap_or_default();
             if k > 0 {
@@ -134,8 +133,8 @@ impl LangGenerator for LangFr {
             let subj = state.pronoun_subject(&CFG);
             let active_adj = if state.is_female { "active" } else { "actif" };
             let bare_year = |d: &WdDate| {
-                parse_time(&d.time)
-                    .map(|(_, y, _, _)| y.to_string())
+                d.parse()
+                    .map(|date| date.year().unsigned_abs().to_string())
                     .unwrap_or_default()
             };
             if let Some(ref date) = floruit {
@@ -436,27 +435,30 @@ impl LangFr {
     /// Render a Wikidata date as a French string.
     /// `jusque`: when true, use "jusqu'en"/"jusqu'au" instead of "en"/"le".
     fn render_date(&self, date: &WdDate, jusque: bool) -> String {
-        let (year, year_str, month, day) = match parse_time(&date.time) {
-            Some(t) => t,
-            None => return "???".to_string(),
+        let Some(date) = date.parse() else {
+            return "???".to_string();
         };
-        let precision = date.precision;
+        let year = date.year().unsigned_abs();
         let mut result = String::new();
 
-        if precision <= 9 {
-            result.push_str(if jusque { "jusqu'en " } else { "en " });
-            result.push_str(year_str);
-        } else if precision == 10 {
-            result.push_str(if jusque { "jusqu'en " } else { "en " });
-            let month_label = CFG.month_labels.get(month as usize).unwrap_or(&"");
-            result.push_str(&format!("{} {}", month_label, year_str));
-        } else {
-            result.push_str(if jusque { "jusqu'au " } else { "le " });
-            let month_label = CFG.month_labels.get(month as usize).unwrap_or(&"");
-            result.push_str(&format!("{} {} {}", day, month_label, year_str));
+        match (date.month(), date.day()) {
+            (Some(month), Some(day)) => {
+                result.push_str(if jusque { "jusqu'au " } else { "le " });
+                let month_label = CFG.month_labels.get(usize::from(month)).unwrap_or(&"");
+                result.push_str(&format!("{} {} {}", day, month_label, year));
+            }
+            (Some(month), None) => {
+                result.push_str(if jusque { "jusqu'en " } else { "en " });
+                let month_label = CFG.month_labels.get(usize::from(month)).unwrap_or(&"");
+                result.push_str(&format!("{} {}", month_label, year));
+            }
+            _ => {
+                result.push_str(if jusque { "jusqu'en " } else { "en " });
+                result.push_str(&year.to_string());
+            }
         }
 
-        if year < 0 {
+        if date.year() < 0 {
             result.push_str(" av. J.-C.");
         }
 

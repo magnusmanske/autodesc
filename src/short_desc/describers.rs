@@ -1,13 +1,13 @@
 use std::sync::OnceLock;
 
 use regex::Regex;
+use wikimisc::title::ucfirst;
 
 use crate::desc_options::DescOptions;
-use crate::qid::QId;
 use crate::wikidata::{WikiData, WikiDataItem};
 
 use super::ShortDescription;
-use super::word_helpers::{Add2DescArgs, WordHints, clean_spaces, split_link, uc_first};
+use super::word_helpers::{Add2DescArgs, WordHints, clean_spaces, split_link};
 
 fn entity_url_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -118,7 +118,7 @@ impl ShortDescription {
                         .unwrap_or_else(|| (String::new(), label.to_string(), String::new()));
                     if let Some(q) = p106_label_to_qid.get(&inner)
                         && let Some(gendered) = wd
-                            .get_item(&QId::parse(q).unwrap())
+                            .get_item_str(q)
                             .and_then(|i| i.get_gendered_label(lang, is_female))
                     {
                         *label = format!("{}{}{}", before, gendered, after);
@@ -267,7 +267,7 @@ impl ShortDescription {
             h.push(self.txt("person", lang));
         }
 
-        let result = uc_first(&h.join(" "));
+        let result = ucfirst(&h.join(" ")).into_owned();
         (q.to_string(), clean_spaces(&result))
     }
 
@@ -379,7 +379,7 @@ impl ShortDescription {
             h_parts.push(format!("[{}]", name));
         }
 
-        let result = uc_first(&h_parts.join(", "));
+        let result = ucfirst(&h_parts.join(", ")).into_owned();
         (q.to_string(), clean_spaces(&result))
     }
 
@@ -684,7 +684,7 @@ impl ShortDescription {
             return (q.to_string(), fallback);
         }
 
-        let result = uc_first(&h.join(" "));
+        let result = ucfirst(&h.join(" ")).into_owned();
         (q.to_string(), clean_spaces(&result))
     }
 

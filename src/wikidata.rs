@@ -4,16 +4,22 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use moka::future::Cache;
-use regex::Regex;
 use reqwest::Client;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use serde_json::value::RawValue;
 use tokio::sync::Semaphore;
+use wikimisc::date::Date;
+use wikimisc::entity_id::ItemId;
+use wikimisc::http::{self, HttpError, HttpRetryPolicy};
 
 use crate::cache_metrics;
-use crate::qid::QId;
 pub use crate::wikidata_item::{MAIN_LANGUAGES, WikiDataItem};
+
+/// What requests to the Wikidata and Commons APIs say they are.
+const USER_AGENT: &str =
+    wikimisc::user_agent!("https://github.com/magnusmanske/autodesc; magnusmanske@googlemail.com");
 
 fn global_client() -> &'static Client {
     static CLIENT: OnceLock<Client> = OnceLock::new();
@@ -23,21 +29,18 @@ fn global_client() -> &'static Client {
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(128);
 
-        Client::builder()
-            .user_agent("autodesc/0.2.0 (https://github.com/magnusmanske/autodesc; magnusmanske@googlemail.com) reqwest")
+        http::client_builder(USER_AGENT)
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(30))
             .pool_max_idle_per_host(pool_max_idle)
             .pool_idle_timeout(Duration::from_secs(90))
             .tcp_keepalive(Duration::from_secs(60))
+            // As before reqwest 0.13, whose TLS stack negotiates HTTP/2:
+            // parallel connections, so the pool settings above apply.
+            .http1_only()
             .build()
             .expect("Failed to build HTTP client")
     })
-}
-
-fn year_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^([+-])0*(\d+)").expect("year regex is valid"))
 }
 
 static SEMAPHORE_LIMIT: AtomicUsize = AtomicUsize::new(500);
@@ -65,9 +68,26 @@ fn semaphore_timeout() -> Duration {
     })
 }
 
-/// Retry configuration for Wikidata API calls.
-const MAX_RETRIES: u32 = 3;
-const BASE_RETRY_DELAY_MS: u64 = 250;
+/// The longest wait before a retry, including one the API asks for with
+/// `Retry-After`. A request that is asked to wait longer fails right away:
+/// these calls serve interactive requests.
+const MAX_RETRY_WAIT: Duration = Duration::from_secs(5);
+
+/// Retries of a Wikidata/Commons API call that failed in a way that may go
+/// away on its own (HTTP 408, 429 and 5xx, and connections that failed or
+/// broke while sending or reading), after 250 ms and then 500 ms, or after
+/// the API's `Retry-After` up to [`MAX_RETRY_WAIT`].
+fn retry_policy() -> &'static HttpRetryPolicy {
+    static POLICY: OnceLock<HttpRetryPolicy> = OnceLock::new();
+    POLICY.get_or_init(|| {
+        HttpRetryPolicy::new(2)
+            .with_initial_backoff(Duration::from_millis(250))
+            .with_max_wait(MAX_RETRY_WAIT)
+            .on_retry(|retry| {
+                tracing::warn!(retry = retry.retry, error = %retry.error, "Wikidata API call failed, retrying");
+            })
+    })
+}
 
 /// Error returned when the semaphore cannot be acquired in time.
 #[derive(Debug, thiserror::Error)]
@@ -78,28 +98,8 @@ pub enum ApiError {
     Api(#[from] anyhow::Error),
 }
 
-/// Execute a fallible async operation with exponential backoff retry.
-async fn with_retry<F, Fut, T>(operation: F) -> Result<T, anyhow::Error>
-where
-    F: Fn() -> Fut,
-    Fut: std::future::Future<Output = Result<T, anyhow::Error>>,
-{
-    let mut last_error = None;
-    for attempt in 0..MAX_RETRIES {
-        match operation().await {
-            Ok(result) => return Ok(result),
-            Err(e) => {
-                tracing::warn!(attempt, error = %e, "Wikidata API call failed, retrying");
-                last_error = Some(e);
-                if attempt + 1 < MAX_RETRIES {
-                    let delay_ms = BASE_RETRY_DELAY_MS * 2u64.pow(attempt);
-                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                }
-            }
-        }
-    }
-    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Retry exhausted with no error")))
-}
+/// The Wikibase time precision of a year.
+const PRECISION_YEAR: u64 = 9;
 
 /// A `wbgetentities` response. Entities stay unparsed until needed, so only one
 /// full entity (which can take tens of MB as a `Value`) is in memory at a time.
@@ -111,12 +111,12 @@ struct EntitiesResponse {
 
 /// The main Wikidata client that fetches and caches entities.
 pub struct WikiData {
-    pub items: HashMap<QId, WikiDataItem>,
+    pub items: HashMap<ItemId, WikiDataItem>,
     client: Client,
     api_url: String,
     max_get_entities: usize,
     /// Optional shared global item cache.
-    item_cache: Option<Cache<QId, WikiDataItem>>,
+    item_cache: Option<Cache<ItemId, WikiDataItem>>,
 }
 
 impl WikiData {
@@ -135,17 +135,24 @@ impl WikiData {
     }
 
     /// Attach a shared global item cache. Items will be read from and written to it.
-    pub fn with_item_cache(mut self, cache: Cache<QId, WikiDataItem>) -> Self {
+    pub fn with_item_cache(mut self, cache: Cache<ItemId, WikiDataItem>) -> Self {
         self.item_cache = Some(cache);
         self
     }
 
-    pub fn has_item(&self, q: &QId) -> bool {
+    pub fn has_item(&self, q: &ItemId) -> bool {
         self.items.contains_key(q)
     }
 
-    pub fn get_item(&self, q: &QId) -> Option<&WikiDataItem> {
+    pub fn get_item(&self, q: &ItemId) -> Option<&WikiDataItem> {
         self.items.get(q)
+    }
+
+    /// The loaded item with the Q-id `q` as found in claims (`"Q42"`), if any.
+    pub fn get_item_str(&self, q: &str) -> Option<&WikiDataItem> {
+        ItemId::parse_lenient(q)
+            .ok()
+            .and_then(|q| self.items.get(&q))
     }
 
     pub fn clear(&mut self) {
@@ -155,11 +162,11 @@ impl WikiData {
     /// Fetch a batch of entities from the Wikidata API.
     /// Entities already in the local map or global item cache are skipped.
     pub async fn get_item_batch(&mut self, item_list: &[String]) -> anyhow::Result<()> {
-        let mut to_load: Vec<QId> = Vec::new();
+        let mut to_load: Vec<ItemId> = Vec::new();
         let mut seen = HashSet::new();
 
         for q_raw in item_list {
-            let q = match QId::parse(q_raw) {
+            let q = match ItemId::parse_lenient(q_raw) {
                 Ok(q) => q,
                 Err(_) => continue,
             };
@@ -171,12 +178,12 @@ impl WikiData {
                 let cached = cache.get(&q).await;
                 cache_metrics::record_lookup(cache_metrics::ITEM, cached.is_some());
                 if let Some(item) = cached {
-                    self.items.insert(q.clone(), item);
+                    self.items.insert(q, item);
                     seen.insert(q);
                     continue;
                 }
             }
-            seen.insert(q.clone());
+            seen.insert(q);
             to_load.push(q);
         }
 
@@ -192,10 +199,10 @@ impl WikiData {
         Ok(())
     }
 
-    async fn load_item_chunk(&mut self, chunk: &[QId]) -> Result<(), anyhow::Error> {
+    async fn load_item_chunk(&mut self, chunk: &[ItemId]) -> Result<(), anyhow::Error> {
         let ids: String = chunk
             .iter()
-            .map(|q| q.as_str())
+            .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("|");
         let params = [
@@ -226,33 +233,17 @@ impl WikiData {
                 }
             };
 
-        // Use retry logic for the API call itself.
-        let api_url = self.api_url.clone();
-        let client = self.client.clone();
-
-        let resp = with_retry(|| {
-            let api_url = api_url.clone();
-            let client = client.clone();
-
-            async move {
-                let resp = client
-                    .get(&api_url)
-                    .query(&params)
-                    .send()
-                    .await?
-                    .json::<EntitiesResponse>()
-                    .await?;
-                Ok(resp)
-            }
-        })
-        .await?;
+        let resp: EntitiesResponse = self.fetch_json(&self.api_url, &params).await?;
 
         for (k, raw) in resp.entities {
-            let q = QId::from_api_key(&k);
+            let Ok(q) = k.parse::<ItemId>() else {
+                tracing::warn!("Wikidata API returned non-item key {k}");
+                continue;
+            };
             let item = WikiDataItem::new(serde_json::from_str(raw.get())?);
             // Populate global item cache with freshly loaded items.
             if let Some(cache) = &self.item_cache {
-                cache.insert(q.clone(), item.clone()).await;
+                cache.insert(q, item.clone()).await;
             }
             self.items.insert(q, item);
         }
@@ -261,8 +252,8 @@ impl WikiData {
 
     /// Convenience: load a single entity by Q-id.
     pub async fn load_entity(&mut self, q: &str) -> anyhow::Result<()> {
-        let q = QId::parse(q).map_err(|e| anyhow::anyhow!("Invalid Q-id: {e}"))?;
-        self.get_item_batch(&[q.as_str().to_string()]).await
+        let q = ItemId::parse_lenient(q).map_err(|e| anyhow::anyhow!("Invalid Q-id: {e}"))?;
+        self.get_item_batch(&[q.to_string()]).await
     }
 
     /// Fetch JSON from an arbitrary URL via GET with query params.
@@ -271,30 +262,19 @@ impl WikiData {
         url: &str,
         params: &[(&str, &str)],
     ) -> anyhow::Result<Value> {
-        let client = self.client.clone();
-        let url = url.to_string();
-        let params: Vec<(String, String)> = params
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
+        Ok(self.fetch_json(url, params).await?)
+    }
 
-        with_retry(|| {
-            let client = client.clone();
-            let url = url.clone();
-            let params = params.clone();
-
-            async move {
-                let resp = client
-                    .get(&url)
-                    .query(&params)
-                    .send()
-                    .await?
-                    .json::<Value>()
-                    .await?;
-                Ok(resp)
-            }
-        })
-        .await
+    /// GETs `url` with `params` and parses the JSON answer, retrying failures
+    /// that may go away on their own.
+    async fn fetch_json<T: DeserializeOwned>(
+        &self,
+        url: &str,
+        params: &[(&str, &str)],
+    ) -> Result<T, HttpError> {
+        retry_policy()
+            .fetch_json(self.client.get(url).query(params))
+            .await
     }
 
     /// Fetch JSON from an arbitrary URL via GET.
@@ -316,23 +296,19 @@ impl WikiData {
             None => return String::new(),
         };
 
-        let re = year_regex();
-
         for claim in claims_arr {
-            let time_str = claim
+            let year = claim
                 .get("mainsnak")
                 .and_then(|ms| ms.get("datavalue"))
                 .and_then(|dv| dv.get("value"))
                 .and_then(|v| v.get("time"))
-                .and_then(|t| t.as_str());
+                .and_then(|t| t.as_str())
+                .and_then(|time| Date::from_wikibase(time, PRECISION_YEAR).ok())
+                .map(|date| date.year());
 
-            if let Some(time_str) = time_str
-                && let Some(caps) = re.captures(time_str)
-            {
-                let sign = caps.get(1).map(|m| m.as_str()).unwrap_or("+");
-                let year = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-                let mut ret = year.to_string();
-                if sign == "-" {
+            if let Some(year) = year {
+                let mut ret = year.unsigned_abs().to_string();
+                if year < 0 {
                     let bc = stock
                         .get("BC")
                         .and_then(|m| m.get(lang).or_else(|| m.get("en")))
@@ -505,9 +481,11 @@ mod tests {
 
         let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
         wd.load_entity("Q12345").await.unwrap();
-        assert!(wd.has_item(&QId::parse("Q12345").unwrap()));
+        assert!(wd.has_item(&ItemId::parse_lenient("Q12345").unwrap()));
 
-        let item = wd.get_item(&QId::parse("Q12345").unwrap()).unwrap();
+        let item = wd
+            .get_item(&ItemId::parse_lenient("Q12345").unwrap())
+            .unwrap();
         assert!(!item.is_placeholder());
 
         let label = item.get_label(Some("en"));
@@ -535,7 +513,9 @@ mod tests {
 
         let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
         wd.load_entity("Q12345").await.unwrap();
-        let item = wd.get_item(&QId::parse("Q12345").unwrap()).unwrap();
+        let item = wd
+            .get_item(&ItemId::parse_lenient("Q12345").unwrap())
+            .unwrap();
 
         assert_eq!(item.get_id(), "Q12345");
         assert!(item.is_item());
@@ -569,8 +549,8 @@ mod tests {
         let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
         let items = vec!["Q42".to_string(), "Q1".to_string()];
         wd.get_item_batch(&items).await.unwrap();
-        assert!(wd.has_item(&QId::parse("Q42").unwrap()));
-        assert!(wd.has_item(&QId::parse("Q1").unwrap()));
+        assert!(wd.has_item(&ItemId::parse_lenient("Q42").unwrap()));
+        assert!(wd.has_item(&ItemId::parse_lenient("Q1").unwrap()));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -591,9 +571,9 @@ mod tests {
 
         let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
         wd.load_entity("Q42").await.unwrap();
-        assert!(wd.has_item(&QId::parse("Q42").unwrap()));
+        assert!(wd.has_item(&ItemId::parse_lenient("Q42").unwrap()));
         wd.clear();
-        assert!(!wd.has_item(&QId::parse("Q42").unwrap()));
+        assert!(!wd.has_item(&ItemId::parse_lenient("Q42").unwrap()));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -616,8 +596,60 @@ mod tests {
             "q1".to_string(),
         ];
         wd.get_item_batch(&items).await.unwrap();
-        assert!(wd.has_item(&QId::parse("Q42").unwrap()));
-        assert!(wd.has_item(&QId::parse("Q1").unwrap()));
+        assert!(wd.has_item(&ItemId::parse_lenient("Q42").unwrap()));
+        assert!(wd.has_item(&ItemId::parse_lenient("Q1").unwrap()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_server_error_is_retried() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(fake_wbgetentities(fake_q42_q1())),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
+        wd.load_entity("Q42").await.unwrap();
+        assert!(wd.has_item(&ItemId::new(42)));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_client_error_is_not_retried() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
+        assert!(wd.load_entity("Q42").await.is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_long_retry_after_fails_at_once() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "3600"))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
+        assert!(wd.load_entity("Q42").await.is_err());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -641,6 +673,6 @@ mod tests {
         let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
         wd.load_entity("Q42").await.unwrap();
         wd.load_entity("Q42").await.unwrap();
-        assert!(wd.has_item(&QId::parse("Q42").unwrap()));
+        assert!(wd.has_item(&ItemId::parse_lenient("Q42").unwrap()));
     }
 }

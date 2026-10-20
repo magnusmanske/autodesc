@@ -3,9 +3,10 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 use serde_json::Value;
+use wikimisc::date::Date;
+use wikimisc::title::wiki_urlencode;
 
 use crate::desc_options::DescOptions;
-use crate::qid::QId;
 use crate::short_desc::ShortDescription;
 use crate::wikidata::{WikiData, WikiDataItem};
 
@@ -35,6 +36,19 @@ pub(super) struct WdDate {
     pub(super) time: String,
     pub(super) precision: u64,
 }
+
+impl WdDate {
+    /// The date, with the parts its precision has. A value that lacks a month
+    /// or day its precision calls for is read as just the year.
+    pub(super) fn parse(&self) -> Option<Date> {
+        Date::from_wikibase(&self.time, self.precision)
+            .or_else(|_| Date::from_wikibase(&self.time, PRECISION_YEAR))
+            .ok()
+    }
+}
+
+/// The Wikibase time precision of a year.
+const PRECISION_YEAR: u64 = 9;
 
 /// An item with optional date qualifiers (start/end).
 #[derive(Debug, Clone)]
@@ -122,11 +136,6 @@ impl LongDescState {
     pub(super) fn push_newline(&mut self) {
         self.fragments.push(Fragment::Text(self.newline.clone()));
     }
-}
-
-fn time_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^([+-])0*(\d+)-(\d{2})-(\d{2})").expect("regex is valid"))
 }
 
 fn clean_output_re() -> &'static Regex {
@@ -314,7 +323,7 @@ fn resolve_fragments(state: &LongDescState, opt: &DescOptions, wd: &WikiData) ->
             Fragment::Item { q, before, after } => {
                 output.push_str(before);
                 let label = wd
-                    .get_item(&QId::parse(q).unwrap())
+                    .get_item_str(q)
                     .map(|item| {
                         let label = item.get_label(Some(&state.lang));
                         if label == item.get_id() {
@@ -353,17 +362,13 @@ fn format_link(q: &str, label: &str, opt: &DescOptions, wd: &WikiData) -> String
             )
         }
         "wiki" => {
-            if let Some(page) = QId::parse(q)
-                .ok()
-                .and_then(|qid| wd.get_item(&qid))
-                .and_then(|item| {
-                    item.raw
-                        .get("sitelinks")
-                        .and_then(|s| s.get(&wiki))
-                        .and_then(|s| s.get("title"))
-                        .and_then(|t| t.as_str())
-                })
-            {
+            if let Some(page) = wd.get_item_str(q).and_then(|item| {
+                item.raw
+                    .get("sitelinks")
+                    .and_then(|s| s.get(&wiki))
+                    .and_then(|s| s.get("title"))
+                    .and_then(|t| t.as_str())
+            }) {
                 if page == label {
                     format!("[[{}]]", label)
                 } else {
@@ -374,18 +379,14 @@ fn format_link(q: &str, label: &str, opt: &DescOptions, wd: &WikiData) -> String
             }
         }
         "wikipedia" => {
-            if let Some(page) = QId::parse(q)
-                .ok()
-                .and_then(|qid| wd.get_item(&qid))
-                .and_then(|item| {
-                    item.raw
-                        .get("sitelinks")
-                        .and_then(|s| s.get(&wiki))
-                        .and_then(|s| s.get("title"))
-                        .and_then(|t| t.as_str())
-                })
-            {
-                let encoded = urlencoding::encode(&page.replace(' ', "_")).to_string();
+            if let Some(page) = wd.get_item_str(q).and_then(|item| {
+                item.raw
+                    .get("sitelinks")
+                    .and_then(|s| s.get(&wiki))
+                    .and_then(|s| s.get("title"))
+                    .and_then(|t| t.as_str())
+            }) {
+                let encoded = wiki_urlencode(page);
                 format!(
                     "<a href='https://{lang}.wikipedia.org/wiki/{page}'{lt}>{label}</a>",
                     lang = opt.lang,
@@ -613,9 +614,7 @@ pub(super) fn get_first_claim_string(claims: &Value, prop: &str) -> Option<Strin
 
 /// Get the main label for the item.
 pub(super) fn get_main_title_label(q: &str, wd: &WikiData, lang: &str) -> String {
-    QId::parse(q)
-        .ok()
-        .and_then(|qid| wd.get_item(&qid))
+    wd.get_item_str(q)
         .map(|item| item.get_label(Some(lang)))
         .unwrap_or_else(|| q.to_string())
 }
@@ -637,18 +636,6 @@ pub(super) fn push_simple_list(
         state.push_text(sep_fn(items.len(), k));
     }
     state.push_text(end);
-}
-
-/// Parse a Wikidata time string into components.
-pub(super) fn parse_time(time: &str) -> Option<(i32, &str, u32, u32)> {
-    let re = time_regex();
-    let caps = re.captures(time)?;
-    let sign = if caps.get(1)?.as_str() == "+" { 1 } else { -1 };
-    let year_str = caps.get(2)?.as_str();
-    let year: i32 = year_str.parse::<i32>().ok()? * sign;
-    let month: u32 = caps.get(3)?.as_str().parse().ok()?;
-    let day: u32 = caps.get(4)?.as_str().parse().ok()?;
-    Some((year, year_str, month, day))
 }
 
 #[cfg(test)]
@@ -846,30 +833,42 @@ mod tests {
         assert_eq!(get_first_claim_string(&claims, "P513"), None);
     }
 
-    // ── parse_time ────────────────────────────────────────────────────────────
+    // ── WdDate::parse ─────────────────────────────────────────────────────────
 
-    #[test]
-    fn test_parse_time_positive() {
-        let (year, year_str, month, day) = parse_time("+1952-03-11T00:00:00Z").unwrap();
-        assert_eq!(year, 1952);
-        assert_eq!(year_str, "1952");
-        assert_eq!(month, 3);
-        assert_eq!(day, 11);
+    fn wd_date(time: &str, precision: u64) -> WdDate {
+        WdDate {
+            time: time.to_string(),
+            precision,
+        }
     }
 
     #[test]
-    fn test_parse_time_negative() {
-        let (year, year_str, month, day) = parse_time("-00000384-00-00T00:00:00Z").unwrap();
-        assert_eq!(year, -384);
-        assert_eq!(year_str, "384");
-        assert_eq!(month, 0);
-        assert_eq!(day, 0);
+    fn test_parse_date_day() {
+        let date = wd_date("+1952-03-11T00:00:00Z", 11).parse().unwrap();
+        assert_eq!(date.year(), 1952);
+        assert_eq!(date.month(), Some(3));
+        assert_eq!(date.day(), Some(11));
     }
 
     #[test]
-    fn test_parse_time_invalid() {
-        assert!(parse_time("not-a-date").is_none());
-        assert!(parse_time("").is_none());
+    fn test_parse_date_bce_year() {
+        let date = wd_date("-00000384-00-00T00:00:00Z", 9).parse().unwrap();
+        assert_eq!(date.year(), -384);
+        assert_eq!(date.month(), None);
+        assert_eq!(date.day(), None);
+    }
+
+    #[test]
+    fn test_parse_date_missing_day_falls_back_to_year() {
+        let date = wd_date("+1952-00-00T00:00:00Z", 11).parse().unwrap();
+        assert_eq!(date.year(), 1952);
+        assert_eq!(date.month(), None);
+    }
+
+    #[test]
+    fn test_parse_date_invalid() {
+        assert!(wd_date("not-a-date", 9).parse().is_none());
+        assert!(wd_date("", 9).parse().is_none());
     }
 
     // ── LongDescState pronouns / be-verbs ─────────────────────────────────────

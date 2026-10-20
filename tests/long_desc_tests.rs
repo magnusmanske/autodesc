@@ -1,5 +1,5 @@
+use autodesc::ItemId;
 use autodesc::Lang;
-use autodesc::QId;
 use autodesc::desc_options::DescOptions;
 use autodesc::long_desc::LongDescGenerator;
 use autodesc::short_desc::ShortDescription;
@@ -112,14 +112,14 @@ fn claims_non_person() -> Value {
 /// Pre-insert a fake item for the given Q-id into `wd`.
 fn insert_item(wd: &mut WikiData, id: &str, label_en: &str) {
     wd.items.insert(
-        QId::parse(id).unwrap(),
+        ItemId::parse_lenient(id).unwrap(),
         WikiDataItem::new(fake_item(id, label_en)),
     );
 }
 
 fn insert_item_json(wd: &mut WikiData, id: &str, raw: Value) {
     wd.items
-        .insert(QId::parse(id).unwrap(), WikiDataItem::new(raw));
+        .insert(ItemId::parse_lenient(id).unwrap(), WikiDataItem::new(raw));
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

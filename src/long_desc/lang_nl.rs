@@ -1,6 +1,5 @@
 use serde_json::Value;
 
-use crate::qid::QId;
 use crate::short_desc::ShortDescription;
 use crate::wikidata::WikiData;
 
@@ -77,7 +76,7 @@ impl LangGenerator for LangNl {
         let nationalities = get_claim_item_ids(claims, "P27");
         for (k, country_q) in nationalities.iter().enumerate() {
             let country_label = wd
-                .get_item(&QId::parse(country_q).unwrap())
+                .get_item_str(country_q)
                 .map(|i| i.get_label(Some(&state.lang)))
                 .unwrap_or_default();
             let nationality =
@@ -102,7 +101,7 @@ impl LangGenerator for LangNl {
             let sep = get_sep_after_nl(occupations.len(), k);
             if (state.is_female || state.is_male)
                 && let Some(gendered) = wd
-                    .get_item(&QId::parse(occ_q).unwrap())
+                    .get_item_str(occ_q)
                     .and_then(|i| i.get_gendered_label(&state.lang, state.is_female))
             {
                 state.push_text(&gendered);
@@ -397,33 +396,36 @@ impl LangNl {
     /// Render a Wikidata date as a Dutch string.
     /// `no_prefix`: when true, omit the "in"/"op" preposition.
     fn render_date(&self, date: &WdDate, no_prefix: bool) -> String {
-        let (year, year_str, month, day) = match parse_time(&date.time) {
-            Some(t) => t,
-            None => return "???".to_string(),
+        let Some(date) = date.parse() else {
+            return "???".to_string();
         };
-        let precision = date.precision;
+        let year = date.year().unsigned_abs();
         let mut result = String::new();
 
-        if precision <= 9 {
-            if !no_prefix {
-                result.push_str("in ");
+        match (date.month(), date.day()) {
+            (Some(month), Some(day)) => {
+                if !no_prefix {
+                    result.push_str("op ");
+                }
+                let month_label = CFG.month_labels.get(usize::from(month)).unwrap_or(&"");
+                result.push_str(&format!("{} {} {}", day, month_label, year));
             }
-            result.push_str(year_str);
-        } else if precision == 10 {
-            if !no_prefix {
-                result.push_str("in ");
+            (Some(month), None) => {
+                if !no_prefix {
+                    result.push_str("in ");
+                }
+                let month_label = CFG.month_labels.get(usize::from(month)).unwrap_or(&"");
+                result.push_str(&format!("{} {}", month_label, year));
             }
-            let month_label = CFG.month_labels.get(month as usize).unwrap_or(&"");
-            result.push_str(&format!("{} {}", month_label, year_str));
-        } else {
-            if !no_prefix {
-                result.push_str("op ");
+            _ => {
+                if !no_prefix {
+                    result.push_str("in ");
+                }
+                result.push_str(&year.to_string());
             }
-            let month_label = CFG.month_labels.get(month as usize).unwrap_or(&"");
-            result.push_str(&format!("{} {} {}", day, month_label, year_str));
         }
 
-        if year < 0 {
+        if date.year() < 0 {
             result.push_str(" v. Chr.");
         }
 

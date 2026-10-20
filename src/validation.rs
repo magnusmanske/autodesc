@@ -3,8 +3,8 @@
 //! Every parameter that comes from the outside must be validated before use.
 //! This module provides validation helpers and collects them into a single place.
 
-use once_cell::sync::Lazy;
-use regex::Regex;
+use wikimisc::entity_id::ItemId;
+use wikimisc::server::jsonp::{self, CallbackRules};
 
 /// Allowed languages (ISO 639-1 two-letter codes served by Wikidata + a few extras).
 const ALLOWED_LANGS: &[&str] = &[
@@ -64,36 +64,32 @@ pub fn validate_format(format: &str) -> bool {
     ALLOWED_FORMATS.contains(&format)
 }
 
-/// Validates that a Q-id looks reasonable: "Q" followed by digits, or just digits.
-pub fn validate_qid(q: &str) -> bool {
-    if q.is_empty() {
-        return false;
-    }
+/// The longest `q` parameter accepted.
+const MAX_QID_LEN: usize = 20;
+
+/// Parses a Q-id from user input: `Q42`, `q42` or `42`, with surrounding
+/// whitespace allowed (see [`ItemId::parse_lenient`]), at most 20 characters.
+pub fn parse_qid(q: &str) -> Option<ItemId> {
     let trimmed = q.trim();
-    if trimmed.len() > 20 {
-        return false;
+    if trimmed.len() > MAX_QID_LEN {
+        return None;
     }
-    let q_re: &Lazy<Regex> = &Lazy::new(|| Regex::new(r"^(?i)Q?\d+$").unwrap());
-    q_re.is_match(trimmed)
+    ItemId::parse_lenient(trimmed).ok()
 }
+
+/// Which JSONP callback names are accepted: JavaScript identifiers,
+/// including dotted paths like `foo.bar.baz` and indexes like `foo[0]`.
+const CALLBACK_RULES: CallbackRules = CallbackRules {
+    allow_dotted: true,
+    max_len: 256,
+};
 
 /// Validates that a JSONP callback name is a safe JavaScript identifier.
 ///
 /// Rejects empty strings and strings containing characters that could be used
 /// for XSS (e.g. `<`, `>`, `(`, `)`, etc.).
 pub fn validate_jsonp_callback(callback: &str) -> bool {
-    if callback.is_empty() {
-        return false;
-    }
-    if callback.len() > 256 {
-        return false;
-    }
-    // Matches valid JS identifiers including dotted paths like "foo.bar.baz"
-    // and bracket notation like "foo[0]"
-    let cb_re: &Lazy<Regex> = &Lazy::new(|| {
-        Regex::new(r"^[a-zA-Z_$][a-zA-Z0-9_$]*(?:\.[a-zA-Z_$][a-zA-Z0-9_$]*|\[\d+\])*$").unwrap()
-    });
-    cb_re.is_match(callback)
+    jsonp::is_valid_callback(callback, CALLBACK_RULES)
 }
 
 /// Maximum length for individual query parameter values.
@@ -109,15 +105,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_validate_qid() {
-        assert!(validate_qid("Q42"));
-        assert!(validate_qid("42"));
-        assert!(validate_qid("q1"));
-        assert!(validate_qid("Q1234567890"));
-        assert!(!validate_qid(""));
-        assert!(!validate_qid("Q"));
-        assert!(!validate_qid("foo"));
-        assert!(!validate_qid("Q12345678901234567890")); // too long
+    fn test_parse_qid() {
+        assert_eq!(parse_qid("Q42"), Some(ItemId::new(42)));
+        assert_eq!(parse_qid("42"), Some(ItemId::new(42)));
+        assert_eq!(parse_qid("q1"), Some(ItemId::new(1)));
+        assert_eq!(parse_qid("  Q42  "), Some(ItemId::new(42)));
+        assert_eq!(parse_qid("Q1234567890"), Some(ItemId::new(1234567890)));
+        assert!(parse_qid("").is_none());
+        assert!(parse_qid("   ").is_none());
+        assert!(parse_qid("Q").is_none());
+        assert!(parse_qid("Qabc").is_none());
+        assert!(parse_qid("foo").is_none());
+        assert!(parse_qid("Q12345678901234567890").is_none()); // too long
     }
 
     #[test]

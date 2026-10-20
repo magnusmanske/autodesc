@@ -1,10 +1,11 @@
 /// Options passed to the description generator.
+use wikimisc::entity_id::ItemId;
+
 use crate::lang_type::Lang;
-use crate::qid::QId;
 
 #[derive(Debug, Clone)]
 pub struct DescOptions {
-    pub q: QId,
+    pub q: ItemId,
     pub lang: Lang,
     pub links: String,
     pub linktarget: String,
@@ -16,7 +17,7 @@ pub struct DescOptions {
 impl Default for DescOptions {
     fn default() -> Self {
         Self {
-            q: QId::parse("Q0").unwrap(), // placeholder; always overwritten
+            q: ItemId::new(0), // placeholder; always overwritten
             lang: Lang::default(),
             links: "wikidata".to_string(),
             linktarget: String::new(),

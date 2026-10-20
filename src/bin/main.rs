@@ -1,19 +1,18 @@
 use autodesc::Format;
+use autodesc::ItemId;
 use autodesc::Lang;
 use autodesc::cache_metrics;
 use autodesc::desc_options::DescOptions;
 use autodesc::lang_type;
 use autodesc::media::MediaGenerator;
-use autodesc::qid::QId;
 use autodesc::short_desc::ShortDescription;
 use autodesc::validation;
 use autodesc::wikidata::{WikiData, WikiDataItem};
 use axum::{
     Router,
     error_handling::HandleErrorLayer,
-    extract::{ConnectInfo, Query, Request, State},
+    extract::{ConnectInfo, Query, State},
     http::{HeaderValue, StatusCode, header},
-    middleware::{self, Next},
     response::{Html, IntoResponse, Json, Response},
     routing::get,
 };
@@ -21,18 +20,17 @@ use moka::future::Cache;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use std::net::SocketAddr;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tower::BoxError;
 use tower::ServiceBuilder;
-use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::compression::CompressionLayer;
-use tower_http::cors::CorsLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::set_header::response::SetResponseHeaderLayer;
-use tower_http::timeout::TimeoutLayer;
-use wikimisc::telemetry::{ExitReason, Telemetry, TelemetryError};
+use wikimisc::escape;
+use wikimisc::server::{self, jsonp};
+use wikimisc::telemetry::Telemetry;
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -81,7 +79,7 @@ impl IpRateLimiter {
 
 #[derive(Clone)]
 struct AppState {
-    item_cache: Cache<QId, WikiDataItem>,
+    item_cache: Cache<ItemId, WikiDataItem>,
     output_cache: Cache<String, String>,
     rate_limiter: IpRateLimiter,
     start_time: Instant,
@@ -287,7 +285,7 @@ fn validate_params(params: &ApiParams) -> Result<(), ValidationErrors> {
 
     if let Some(ref q) = params.q
         && !q.is_empty()
-        && !validation::validate_qid(q)
+        && validation::parse_qid(q).is_none()
     {
         errs.push(format!(
             "Invalid Q-id: '{}'. Expected format: Q followed by digits.",
@@ -403,9 +401,9 @@ fn cached_response(cached_json: String, args: &ApiParams) -> Response {
             html.push_str("<style>a.redlink { color:red }</style>");
             html.push_str(&format!(
                 "<h1>{} (<a href='//www.wikidata.org/wiki/{}'>{}</a>)</h1>",
-                html_escape::encode_text(&label),
-                html_escape::encode_text(&q),
-                html_escape::encode_text(&q)
+                escape::html_text(&label),
+                escape::html_text(&q),
+                escape::html_text(&q)
             ));
             if args.links == "wiki" {
                 html.push_str(&format!(
@@ -428,7 +426,7 @@ fn cached_response(cached_json: String, args: &ApiParams) -> Response {
                 String::from("<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body>");
             html.push_str("<p>You are looking at the HTML representation of the JSON format. HTML is good for debugging, but is unsuitable for application use.</p>");
             html.push_str("<hr/><pre style='white-space:pre-wrap'>");
-            html.push_str(&html_escape::encode_text(&json_text));
+            html.push_str(&escape::html_text(&json_text));
             html.push_str("</pre></body></html>");
             Html(html).into_response()
         }
@@ -436,11 +434,10 @@ fn cached_response(cached_json: String, args: &ApiParams) -> Response {
             if let Some(ref callback) = args.callback
                 && !callback.is_empty()
             {
-                let jsonp = format!("{}({})", callback, cached_json);
                 return (
                     StatusCode::OK,
-                    [("content-type", "application/javascript; charset=utf-8")],
-                    jsonp,
+                    [("content-type", jsonp::CONTENT_TYPE)],
+                    jsonp::wrap(callback, &cached_json),
                 )
                     .into_response();
             }
@@ -502,15 +499,16 @@ async fn api_handler(
         _ => return Html(INDEX_HTML.to_string()).into_response(),
     };
 
-    let q = match QId::parse(&q_raw) {
-        Ok(q) => q,
-        Err(e) => return error_json(StatusCode::BAD_REQUEST, &format!("Invalid Q-id: {e}")),
+    // Already checked by `validate_params`.
+    let Some(q) = validation::parse_qid(&q_raw) else {
+        return error_json(StatusCode::BAD_REQUEST, "Invalid Q-id");
     };
-    args.q = Some(q.as_str().to_string());
+    let q_str = q.to_string();
+    args.q = Some(q_str.clone());
 
     let output_key = format!(
         "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
-        q.as_str(),
+        q_str,
         args.lang,
         args.mode,
         args.links,
@@ -530,7 +528,7 @@ async fn api_handler(
     }
 
     let mut opt = DescOptions {
-        q: q.clone(),
+        q,
         lang: Lang::parse(&args.lang).unwrap_or_else(|_| Lang::default()),
         links: args.links.clone(),
         mode: args.mode.clone(),
@@ -540,7 +538,7 @@ async fn api_handler(
     let mut wd = WikiData::new().with_item_cache(state.item_cache.clone());
     let sd = ShortDescription::global();
 
-    let (_result_q, output) = sd.load_item(q.as_str(), &mut opt, &mut wd).await;
+    let (_result_q, output) = sd.load_item(&q_str, &mut opt, &mut wd).await;
 
     let label = wd
         .get_item(&q)
@@ -569,7 +567,7 @@ async fn api_handler(
 
     let mut response = ApiResponse {
         call,
-        q: q.to_string(),
+        q: q_str.clone(),
         label: label.clone(),
         manual_description: manual_desc,
         result: output,
@@ -577,7 +575,7 @@ async fn api_handler(
         thumbnails: None,
     };
 
-    add_media(&args, q.as_str(), wd, &mut response).await;
+    add_media(&args, &q_str, wd, &mut response).await;
 
     let cached_json = serde_json::to_string(&response).unwrap_or_default();
     let cannot_describe = format!("<i>{}</i>", sd.txt("cannot_describe", &args.lang));
@@ -586,7 +584,7 @@ async fn api_handler(
     }
 
     match args.format {
-        Format::Html => render_html(&args, q.to_string(), label, &response),
+        Format::Html => render_html(&args, q_str, label, &response),
         Format::JsonFm => render_jsonfm(&args, &response),
         Format::Json => render_json(args, response),
     }
@@ -614,11 +612,10 @@ fn render_json(args: ApiParams, response: ApiResponse) -> Response {
     if let Some(ref callback) = args.callback
         && !callback.is_empty()
     {
-        let jsonp = format!("{}({})", callback, json_str);
         return (
             StatusCode::OK,
-            [("content-type", "application/javascript; charset=utf-8")],
-            jsonp,
+            [("content-type", jsonp::CONTENT_TYPE)],
+            jsonp::wrap(callback, &json_str),
         )
             .into_response();
     }
@@ -636,17 +633,17 @@ fn render_jsonfm(args: &ApiParams, response: &ApiResponse) -> Response {
 
     let mut json_params: Vec<String> = Vec::new();
     if let Some(ref q_val) = args.q {
-        json_params.push(format!("q={}", html_escape::encode_text(q_val)));
+        json_params.push(format!("q={}", escape::html_text(q_val)));
     }
-    json_params.push(format!("lang={}", html_escape::encode_text(&args.lang)));
-    json_params.push(format!("mode={}", html_escape::encode_text(&args.mode)));
-    json_params.push(format!("links={}", html_escape::encode_text(&args.links)));
+    json_params.push(format!("lang={}", escape::html_text(&args.lang)));
+    json_params.push(format!("mode={}", escape::html_text(&args.mode)));
+    json_params.push(format!("links={}", escape::html_text(&args.links)));
     json_params.push("format=json".to_string());
     if !args.media.is_empty() {
-        json_params.push(format!("media={}", html_escape::encode_text(&args.media)));
+        json_params.push(format!("media={}", escape::html_text(&args.media)));
     }
     if !args.thumb.is_empty() {
-        json_params.push(format!("thumb={}", html_escape::encode_text(&args.thumb)));
+        json_params.push(format!("thumb={}", escape::html_text(&args.thumb)));
     }
 
     let json_link = format!("<a href='?{}'>format=json</a>", json_params.join("&"));
@@ -658,7 +655,7 @@ fn render_jsonfm(args: &ApiParams, response: &ApiResponse) -> Response {
         json_link
     ));
     html.push_str("<hr/><pre style='white-space:pre-wrap'>");
-    html.push_str(&html_escape::encode_text(&json_text));
+    html.push_str(&escape::html_text(&json_text));
     html.push_str("</pre></body></html>");
     Html(html).into_response()
 }
@@ -700,9 +697,9 @@ fn render_html(args: &ApiParams, q: String, label: String, response: &ApiRespons
     html.push_str("<style>a.redlink { color:red }</style>");
     html.push_str(&format!(
         "<h1>{} (<a href='//www.wikidata.org/wiki/{}'>{}</a>)</h1>",
-        html_escape::encode_text(&label),
-        html_escape::encode_text(&q),
-        html_escape::encode_text(&q)
+        escape::html_text(&label),
+        escape::html_text(&q),
+        escape::html_text(&q)
     ));
 
     if let Some((thumburl, descurl)) = first_thumbnail(response) {
@@ -711,8 +708,8 @@ fn render_html(args: &ApiParams, q: String, label: String, response: &ApiRespons
              <a href='{descurl}' target='_blank'>\
              <img src='{thumburl}' style='max-width:200px;max-height:200px;display:block;'/>\
              </a></div>",
-            descurl = html_escape::encode_quoted_attribute(&descurl),
-            thumburl = html_escape::encode_quoted_attribute(&thumburl),
+            descurl = escape::html(&descurl),
+            thumburl = escape::html(&thumburl),
         ));
     }
 
@@ -736,35 +733,11 @@ fn render_html(args: &ApiParams, q: String, label: String, response: &ApiRespons
 /// Telemetry is optional: a missing token or any other error only gets logged.
 /// Signals are left to the graceful shutdown, which sends the final push.
 fn start_telemetry() -> bool {
-    match Telemetry::builder("web")
+    Telemetry::builder("web")
         .version(env!("CARGO_PKG_VERSION"))
         .handle_signals(false)
-        .install()
-    {
-        Ok(_) => {
-            tracing::info!("telemetry enabled");
-            true
-        }
-        Err(e @ TelemetryError::NoToken) => {
-            tracing::info!("telemetry disabled: {e}");
-            false
-        }
-        Err(e) => {
-            tracing::warn!("telemetry disabled: {e}");
-            false
-        }
-    }
-}
-
-/// Records each request for the service dashboard; health checks are left out.
-async fn record_request(req: Request, next: Next) -> Response {
-    if req.uri().path() == "/health" {
-        return next.run(req).await;
-    }
-    let start = Instant::now();
-    let response = next.run(req).await;
-    wikimisc::telemetry::record_http_request(response.status().as_u16(), start.elapsed());
-    response
+        .install_or_log()
+        .is_some()
 }
 
 /// Reports the cache sizes (and the item cache memory) once a minute.
@@ -786,12 +759,7 @@ fn spawn_cache_size_reporter(state: &AppState) {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    wikimisc::logging::init();
 
     lang_type::init_langs().await;
 
@@ -820,35 +788,18 @@ async fn main() {
         .with_state(state);
     let app = add_layers(app, max_concurrency, Duration::from_secs(timeout_sec));
 
-    let address = std::env::var("AUTODESC_ADDRESS")
-        .ok()
-        .unwrap_or("0.0.0.0".to_string());
-
-    let port: u16 = std::env::var("AUTODESC_PORT")
-        .ok()
-        .and_then(|v| v.parse::<u16>().ok())
-        .unwrap_or(8000);
-
-    let bind_addr = format!("{address}:{port}");
+    let bind_addr = server::listen_addr("AUTODESC", 8000);
     tracing::info!("AutoDesc server starting on http://{}", bind_addr);
 
-    let listener = tokio::net::TcpListener::bind(&bind_addr)
+    let listener = tokio::net::TcpListener::bind(bind_addr)
         .await
         .expect("Failed to bind address");
 
-    // Which signal ended the server, for the final telemetry push.
-    let signal = Arc::new(OnceLock::new());
-    let received = Arc::clone(&signal);
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(async move { _ = received.set(shutdown_signal().await) })
-    .await
-    .expect("Server error");
-
-    let signal = signal.get().copied().unwrap_or("unknown signal");
-    wikimisc::telemetry::shutdown(ExitReason::Shutdown(signal.to_string())).await;
+    // Drains in-flight requests on SIGTERM/SIGINT, then sends the final
+    // telemetry push.
+    server::serve_with_connect_info(listener, app)
+        .await
+        .expect("Server error");
 }
 
 /// Wraps the routes in the middleware stack (listed innermost first).
@@ -874,61 +825,30 @@ fn add_layers(app: Router, max_concurrency: usize, timeout: Duration) -> Router 
             router.layer(SetResponseHeaderLayer::if_not_present(name, value))
         });
 
-    app.layer(RequestBodyLimitLayer::new(8192))
+    let app = app
+        .layer(RequestBodyLimitLayer::new(8192))
         .layer(CompressionLayer::new())
         .layer(SetResponseHeaderLayer::if_not_present(
             header::CACHE_CONTROL,
             HeaderValue::from_static("public, max-age=3600"),
-        ))
-        // Turns a panicking handler into a 500 instead of a dropped connection.
-        // Outside the cache header, so the error is not cached for an hour;
-        // inside CORS, so browser clients can still read the status.
-        .layer(CatchPanicLayer::new())
-        .layer(build_cors_layer())
-        .layer(TimeoutLayer::new(timeout))
-        .layer(
-            ServiceBuilder::new()
-                .layer(HandleErrorLayer::new(|_: BoxError| async {
-                    StatusCode::SERVICE_UNAVAILABLE
-                }))
-                .load_shed()
-                .concurrency_limit(max_concurrency),
-        )
-        // Outermost, so load shedding (503), timeouts (408) and panics (500)
-        // are recorded too.
-        .layer(middleware::from_fn(record_request))
-}
-
-fn build_cors_layer() -> CorsLayer {
-    CorsLayer::permissive()
-}
-
-/// Waits for SIGINT or SIGTERM and returns its name.
-async fn shutdown_signal() -> &'static str {
-    let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install signal handler")
-            .recv()
-            .await;
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    let signal = tokio::select! {
-        _ = ctrl_c => "SIGINT",
-        _ = terminate => "SIGTERM",
-    };
-
-    tracing::info!("{signal} received, starting graceful shutdown...");
-    signal
+        ));
+    // Turns a panicking handler into a 500 instead of a dropped connection.
+    // Outside the cache header, so the error is not cached for an hour;
+    // inside CORS, so browser clients can still read the status.
+    let app = server::catch_panic(app);
+    let app = server::cors_any(app);
+    let app = server::timeout(app, timeout, StatusCode::REQUEST_TIMEOUT);
+    let app = app.layer(
+        ServiceBuilder::new()
+            .layer(HandleErrorLayer::new(|_: BoxError| async {
+                StatusCode::SERVICE_UNAVAILABLE
+            }))
+            .load_shed()
+            .concurrency_limit(max_concurrency),
+    );
+    // Outermost, so load shedding (503), timeouts (408) and panics (500)
+    // are recorded too.
+    server::request_metrics(app, &["/health"])
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -1017,6 +937,7 @@ mod tests {
 
     #[tokio::test]
     async fn panicking_handler_returns_500() {
+        use axum::extract::Request;
         use tower::Service;
 
         async fn boom() -> &'static str {

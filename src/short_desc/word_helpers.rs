@@ -46,17 +46,6 @@ fn clean_space_comma_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r" ,").expect("regex is valid"))
 }
 
-pub(super) fn uc_first(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(c) => {
-            let upper: String = c.to_uppercase().collect();
-            format!("{}{}", upper, chars.as_str())
-        }
-    }
-}
-
 /// Split a link string into parts: (full_match, before, inner_text, after).
 /// Returns `None` for plain (non-link) text.
 pub(super) fn split_link(v: &str) -> Option<(String, String, String, String)> {
@@ -96,12 +85,6 @@ pub(super) fn clean_spaces(s: &str) -> String {
     let result = clean_spaces_re().replace_all(s, " ");
     let result = clean_space_comma_re().replace_all(&result, ",");
     result.trim().to_string()
-}
-
-/// URL-encode a wiki page title.
-pub(super) fn wiki_urlencode(s: &str) -> String {
-    let s = s.replace(' ', "_");
-    urlencoding::encode(&s).to_string()
 }
 
 impl ShortDescription {
@@ -202,31 +185,6 @@ impl ShortDescription {
 mod tests {
     use super::*;
     use crate::short_desc::ShortDescription;
-
-    #[test]
-    fn test_wiki_urlencode_spaces() {
-        assert_eq!(wiki_urlencode("New York"), "New_York");
-    }
-
-    #[test]
-    fn test_wiki_urlencode_special_chars() {
-        assert_eq!(wiki_urlencode("Côte d'Ivoire"), "C%C3%B4te_d%27Ivoire");
-    }
-
-    #[test]
-    fn test_wiki_urlencode_no_change() {
-        assert_eq!(wiki_urlencode("London"), "London");
-    }
-
-    #[test]
-    fn test_uc_first_unicode() {
-        assert_eq!(uc_first("über"), "Über");
-    }
-
-    #[test]
-    fn test_uc_first_empty() {
-        assert_eq!(uc_first(""), "");
-    }
 
     #[test]
     fn test_split_link_wiki_no_pipe() {

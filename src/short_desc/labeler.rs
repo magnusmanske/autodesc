@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
+use wikimisc::title::wiki_urlencode;
+
 use crate::desc_options::DescOptions;
-use crate::qid::QId;
 use crate::wikidata::WikiData;
 
 use super::ShortDescription;
-use super::word_helpers::{Add2DescArgs, wiki_urlencode};
+use super::word_helpers::Add2DescArgs;
 
 impl ShortDescription {
     /// Create labeled links for a set of items. Returns a map from property number to list of labels/links.
@@ -44,7 +45,7 @@ impl ShortDescription {
         let mut cb: HashMap<u64, Vec<String>> = HashMap::new();
 
         for q_str in &ids {
-            let item = match QId::parse(q_str).ok().and_then(|q| wd.get_item(&q)) {
+            let item = match wd.get_item_str(q_str) {
                 Some(i) => i,
                 None => continue,
             };
@@ -212,10 +213,7 @@ impl ShortDescription {
             .iter()
             .filter(|(p, _)| *p == prop)
             .filter_map(|(_, q)| {
-                let label = QId::parse(q)
-                    .ok()
-                    .and_then(|qid| wd.get_item(&qid))?
-                    .get_label(Some(lang));
+                let label = wd.get_item_str(q)?.get_label(Some(lang));
                 if label == *q {
                     None
                 } else {
@@ -236,10 +234,7 @@ impl ShortDescription {
         wd: &WikiData,
     ) -> String {
         if let Some(q) = country_q
-            && let Some(demonym) = QId::parse(q)
-                .ok()
-                .and_then(|qid| wd.get_item(&qid))
-                .and_then(|item| item.get_demonym(lang))
+            && let Some(demonym) = wd.get_item_str(q).and_then(|item| item.get_demonym(lang))
         {
             return demonym;
         }

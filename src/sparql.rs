@@ -9,14 +9,7 @@ use wikimisc::sparql_client::SparqlClient;
 use wikimisc::sparql_endpoint::SparqlEndpoint;
 
 /// What SPARQL requests say they are. Wikimedia asks for contact information.
-const USER_AGENT: &str = concat!(
-    env!("CARGO_PKG_NAME"),
-    "/",
-    env!("CARGO_PKG_VERSION"),
-    " (",
-    env!("CARGO_PKG_REPOSITORY"),
-    ")"
-);
+const USER_AGENT: &str = wikimisc::user_agent!();
 
 /// Retries of a query that failed in a way that may go away on its own.
 /// One only: a request is waiting.

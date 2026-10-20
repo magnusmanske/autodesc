@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+use wikimisc::entity_id::ItemId;
+
 use crate::desc_options::DescOptions;
 use crate::long_desc;
-use crate::qid::QId;
 use crate::wikidata::WikiData;
 
 mod claims;
@@ -56,19 +57,20 @@ impl ShortDescription {
         opt: &mut DescOptions,
         wd: &mut WikiData,
     ) -> (String, String) {
-        let q = match QId::parse(q) {
+        let q = match ItemId::parse_lenient(q) {
             Ok(q) => q,
             Err(e) => {
                 let err_msg = format!("<i>{}</i>", self.txt("cannot_describe", opt.lang.as_str()));
                 return (e.to_string(), err_msg);
             }
         };
-        opt.q = q.clone();
+        opt.q = q;
+        let q_str = q.to_string();
 
-        if let Err(e) = wd.load_entity(q.as_str()).await {
+        if let Err(e) = wd.load_entity(&q_str).await {
             tracing::warn!("Failed to load entity {}: {}", q, e);
             return (
-                q.to_string(),
+                q_str,
                 format!("<i>{}</i>", self.txt("cannot_describe", opt.lang.as_str())),
             );
         }
@@ -84,21 +86,21 @@ impl ShortDescription {
         // Try long description if mode=long
         if opt.mode == "long"
             && let Some(long_result) =
-                long_desc::LongDescGenerator::generate(self, q.as_str(), claims, opt, wd).await
+                long_desc::LongDescGenerator::generate(self, &q_str, claims, opt, wd).await
         {
-            return (q.to_string(), long_result);
+            return (q_str, long_result);
         }
         // Fall through to short description if long is not available
 
         if Self::is_person(claims) {
-            self.describe_person(q.as_str(), claims, opt, wd).await
+            self.describe_person(&q_str, claims, opt, wd).await
         } else if Self::is_taxon(claims) {
-            self.describe_taxon(q.as_str(), claims, opt, wd).await
+            self.describe_taxon(&q_str, claims, opt, wd).await
         } else if Self::is_disambig(claims) {
             let desc = self.txt("disambig", opt.lang.as_str());
-            (q.to_string(), desc)
+            (q_str, desc)
         } else {
-            self.describe_generic(q.as_str(), claims, opt, wd).await
+            self.describe_generic(&q_str, claims, opt, wd).await
         }
     }
 }
@@ -111,7 +113,7 @@ impl Default for ShortDescription {
 
 #[cfg(test)]
 mod tests {
-    use super::word_helpers::{clean_spaces, split_link, uc_first};
+    use super::word_helpers::{clean_spaces, split_link};
     use super::*;
     use crate::Lang;
 
@@ -217,13 +219,6 @@ mod tests {
             sd.list_words(&["one".to_string(), "two".to_string()], &empty, "de"),
             "one und two"
         );
-    }
-
-    #[test]
-    fn test_uc_first() {
-        assert_eq!(uc_first("hello"), "Hello");
-        assert_eq!(uc_first(""), "");
-        assert_eq!(uc_first("Hello"), "Hello");
     }
 
     #[test]

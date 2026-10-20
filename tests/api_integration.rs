@@ -1,6 +1,6 @@
+use autodesc::ItemId;
 use autodesc::Lang;
 use autodesc::desc_options::DescOptions;
-use autodesc::qid::QId;
 use autodesc::short_desc::{ShortDescription, WordHints};
 use autodesc::wikidata::WikiData;
 
@@ -172,9 +172,7 @@ async fn test_api_label_and_description() {
 
     let _ = sd.load_item("Q42", &mut opt, &mut wd).await;
 
-    let item = wd
-        .get_item(&QId::parse("Q42").unwrap())
-        .expect("Q42 should be loaded");
+    let item = wd.get_item(&ItemId::new(42)).expect("Q42 should be loaded");
     let label = item.get_label(Some("en"));
     assert_eq!(label, "Douglas Adams");
 
@@ -380,10 +378,10 @@ async fn test_batch_loading_dedup() {
     ];
     wd.get_item_batch(&items).await.unwrap();
 
-    assert!(wd.has_item(&QId::parse("Q42").unwrap()));
-    assert!(wd.has_item(&QId::parse("Q1").unwrap()));
+    assert!(wd.has_item(&ItemId::new(42)));
+    assert!(wd.has_item(&ItemId::new(1)));
 
     // Second load should be a no-op (items already cached)
     wd.get_item_batch(&["Q42".to_string()]).await.unwrap();
-    assert!(wd.has_item(&QId::parse("Q42").unwrap()));
+    assert!(wd.has_item(&ItemId::new(42)));
 }

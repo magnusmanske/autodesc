@@ -110,7 +110,7 @@ They include, where available: nationality, occupation, birth and death details,
 `autodesc` is also a regular Rust crate. The main types you'll care about:
 
 ```rust
-use autodesc::QId;
+use autodesc::ItemId;
 use autodesc::Lang;
 use autodesc::desc_options::DescOptions;
 use autodesc::short_desc::ShortDescription;
@@ -119,14 +119,14 @@ use autodesc::wikidata::WikiData;
 let sd = ShortDescription::new();
 let mut wd = WikiData::new();
 let mut opt = DescOptions {
-    q: QId::parse("Q42").unwrap(),
+    q: ItemId::new(42),
     lang: Lang::parse("en").unwrap(),
     links: "text".to_string(),
     mode: "short".to_string(),
     ..Default::default()
 };
 
-let (q, description) = sd.load_item(q.as_str(), &mut opt, &mut wd).await;
+let (q, description) = sd.load_item("Q42", &mut opt, &mut wd).await;
 println!("{q}: {description}");
 ```
 

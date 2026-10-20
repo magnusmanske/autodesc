@@ -2,6 +2,24 @@
 
 All notable changes to the AutoDesc project.
 
+## Unreleased
+
+### Changed
+
+- Uses the shared helpers of wikimisc 0.3: `QId` is replaced by
+  `wikimisc::entity_id::ItemId` (re-exported as `autodesc::ItemId`; `Q0` is
+  rejected and leading zeros are dropped), dates are read with
+  `wikimisc::date::Date`, page URLs encoded with `wikimisc::title`, HTML
+  escaped with `wikimisc::escape`, and the server uses `wikimisc::server`
+  (graceful shutdown, listen address, request metrics) and
+  `wikimisc::logging` (logs now go to stderr).
+- Wikidata/Commons API calls are no longer retried after an HTTP 4xx error
+  (except 408 and 429), nor after a response that is not valid JSON. A
+  `Retry-After` of up to 5 s is waited out; a longer one fails the call at
+  once.
+- JSONP responses end with `;`.
+- Upgraded to axum 0.8, tower 0.5, tower-http 0.7 and reqwest 0.13.
+
 ## [0.3.0] — 2026-07-29
 
 ### Added
