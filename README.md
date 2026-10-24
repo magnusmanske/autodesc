@@ -23,7 +23,7 @@ By default it listens on `0.0.0.0:8000`. Override with environment variables:
 | `AUTODESC_ADDRESS` | `0.0.0.0` | Bind address |
 | `AUTODESC_PORT` | `8000` | Bind port |
 | `AUTODESC_ITEM_CACHE_TTL_SECS` | `3600` | How long to cache Wikidata items (seconds) |
-| `AUTODESC_ITEM_CACHE_MB` | `512` | Memory budget for cached items (MiB) |
+| `AUTODESC_ITEM_CACHE_MB` | 40% of the memory limit (`512` if none) | Memory budget for cached items (MiB); capped at 40% of the cgroup memory limit |
 | `AUTODESC_OUTPUT_CACHE_TTL_SECS` | `600` | How long to cache generated descriptions (seconds) |
 | `AUTODESC_OUTPUT_CACHE_SIZE` | `1000` | Max number of cached output strings |
 | `AUTODESC_MAX_CONCURRENCY` | `5000` | Max concurrent requests |

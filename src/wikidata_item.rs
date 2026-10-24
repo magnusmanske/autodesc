@@ -13,24 +13,72 @@ fn unified_id(s: &str) -> String {
     s.trim().to_uppercase()
 }
 
-/// Statement fields that are never read; dropped on construction to save memory.
-/// References alone make up well over half of a large item (e.g. countries).
-const UNUSED_STATEMENT_FIELDS: &[&str] = &["references", "qualifiers-order"];
+// The only fields read of each part of an entity. Everything else is dropped on
+// construction to save memory; that is about three quarters of a typical item
+// (references alone are over half of a large one, e.g. a country).
+const STATEMENT_FIELDS: &[&str] = &["mainsnak", "qualifiers"];
+const SNAK_FIELDS: &[&str] = &["datavalue"];
+const TERM_FIELDS: &[&str] = &["value"];
+const SITELINK_FIELDS: &[&str] = &["title"];
 
-/// Remove unused statement fields from an entity's claims.
-fn strip_unused(raw: &mut Value) {
-    let Some(claims) = raw.get_mut("claims").and_then(Value::as_object_mut) else {
-        return;
-    };
-    let statements = claims
-        .values_mut()
+/// Datatypes of properties that are never read. Popular items have hundreds
+/// of external IDs, about a quarter of their size.
+const UNUSED_DATATYPES: &[&str] = &["external-id"];
+
+/// Keep only the `keep` fields of `value`, if it is an object.
+fn retain_fields(value: &mut Value, keep: &[&str]) {
+    if let Some(obj) = value.as_object_mut() {
+        obj.retain(|k, _| keep.contains(&k.as_str()));
+    }
+}
+
+/// The values of the object `parent[key]`, if there is one.
+fn values_mut<'a>(parent: &'a mut Value, key: &str) -> impl Iterator<Item = &'a mut Value> {
+    parent
+        .get_mut(key)
+        .and_then(Value::as_object_mut)
+        .into_iter()
+        .flat_map(|obj| obj.values_mut())
+}
+
+/// The elements of all arrays in the object `parent[key]`.
+fn array_values_mut<'a>(parent: &'a mut Value, key: &str) -> impl Iterator<Item = &'a mut Value> {
+    values_mut(parent, key)
         .filter_map(Value::as_array_mut)
         .flatten()
-        .filter_map(Value::as_object_mut);
-    for statement in statements {
-        for field in UNUSED_STATEMENT_FIELDS {
-            statement.remove(*field);
+}
+
+/// Whether `statements` (all for one property) have a datatype that is never read.
+fn has_unused_datatype(statements: &Value) -> bool {
+    statements
+        .get(0)
+        .and_then(|s| s.get("mainsnak"))
+        .and_then(|ms| ms.get("datatype"))
+        .and_then(Value::as_str)
+        .is_some_and(|datatype| UNUSED_DATATYPES.contains(&datatype))
+}
+
+/// Remove everything from an entity that is never read.
+fn strip_unused(raw: &mut Value) {
+    if let Some(claims) = raw.get_mut("claims").and_then(Value::as_object_mut) {
+        claims.retain(|_, statements| !has_unused_datatype(statements));
+    }
+    for statement in array_values_mut(raw, "claims") {
+        retain_fields(statement, STATEMENT_FIELDS);
+        if let Some(mainsnak) = statement.get_mut("mainsnak") {
+            retain_fields(mainsnak, SNAK_FIELDS);
         }
+        for qualifier in array_values_mut(statement, "qualifiers") {
+            retain_fields(qualifier, SNAK_FIELDS);
+        }
+    }
+    for key in ["labels", "descriptions"] {
+        for term in values_mut(raw, key) {
+            retain_fields(term, TERM_FIELDS);
+        }
+    }
+    for sitelink in values_mut(raw, "sitelinks") {
+        retain_fields(sitelink, SITELINK_FIELDS);
     }
 }
 
@@ -68,7 +116,7 @@ pub struct WikiDataItem {
 }
 
 impl WikiDataItem {
-    /// Wraps an entity, dropping statement data that is never used (see `UNUSED_STATEMENT_FIELDS`).
+    /// Wraps an entity, dropping data that is never used (see `strip_unused`).
     pub fn new(mut raw: Value) -> Self {
         strip_unused(&mut raw);
         let placeholder = raw.is_null();
@@ -354,36 +402,6 @@ impl WikiDataItem {
             .unwrap_or_default()
     }
 
-    pub fn get_aliases_for_language(&self, lang: &str, include_labels: bool) -> Vec<String> {
-        let mut aliases = HashMap::new();
-
-        if let Some(arr) = self
-            .raw
-            .get("aliases")
-            .and_then(|a| a.get(lang))
-            .and_then(|a| a.as_array())
-        {
-            for item in arr {
-                if let Some(val) = item.get("value").and_then(|v| v.as_str()) {
-                    aliases.insert(val.to_string(), true);
-                }
-            }
-        }
-
-        if include_labels
-            && let Some(label) = self
-                .raw
-                .get("labels")
-                .and_then(|ls| ls.get(lang))
-                .and_then(|l| l.get("value"))
-                .and_then(|v| v.as_str())
-        {
-            aliases.insert(label.to_string(), true);
-        }
-
-        aliases.into_keys().collect()
-    }
-
     /// Returns the best quantity string from a list of claims for a quantity property.
     pub fn get_best_quantity(claims: &[Value]) -> Option<String> {
         let dv = claims.first()?.get("mainsnak")?.get("datavalue")?;
@@ -423,27 +441,83 @@ mod tests {
         assert!(item.get_wiki_links().is_empty());
     }
 
+    /// An entity with all the fields the Wikidata API returns, used or not.
     fn item_with_referenced_claim() -> WikiDataItem {
         WikiDataItem::new(json!({
+            "id": "Q42",
+            "ns": 0,
+            "labels": { "en": { "language": "en", "value": "Douglas Adams" } },
+            "descriptions": { "en": { "language": "en", "value": "English author" } },
             "claims": {
                 "P27": [{
-                    "mainsnak": { "datavalue": { "value": { "entity-type": "item", "id": "Q183" } } },
-                    "qualifiers": { "P580": [{ "datavalue": { "value": { "time": "+1990-00-00T00:00:00Z" } } }] },
+                    "id": "Q42$1",
+                    "type": "statement",
+                    "rank": "normal",
+                    "mainsnak": {
+                        "snaktype": "value",
+                        "property": "P27",
+                        "hash": "abc",
+                        "datatype": "wikibase-item",
+                        "datavalue": { "type": "wikibase-entityid", "value": { "entity-type": "item", "id": "Q183" } }
+                    },
+                    "qualifiers": { "P580": [{
+                        "snaktype": "value",
+                        "property": "P580",
+                        "hash": "def",
+                        "datatype": "time",
+                        "datavalue": { "type": "time", "value": { "time": "+1990-00-00T00:00:00Z" } }
+                    }] },
                     "qualifiers-order": ["P580"],
                     "references": [{ "snaks": { "P248": [{ "datavalue": { "value": { "id": "Q36578" } } }] } }]
+                }],
+                "P214": [{
+                    "mainsnak": {
+                        "datatype": "external-id",
+                        "datavalue": { "type": "string", "value": "113230702" }
+                    }
                 }]
+            },
+            "sitelinks": {
+                "enwiki": { "site": "enwiki", "title": "Douglas Adams", "badges": ["Q17437798"] }
             }
         }))
     }
 
     #[test]
-    fn test_new_strips_unused_statement_fields() {
+    fn test_new_strips_unused_fields() {
         let item = item_with_referenced_claim();
-        let claim = &item.claims_slice("P27")[0];
-        assert!(claim.get("references").is_none());
-        assert!(claim.get("qualifiers-order").is_none());
-        assert!(claim.get("qualifiers").is_some());
+        let qualifier = json!({ "datavalue": { "type": "time", "value": { "time": "+1990-00-00T00:00:00Z" } } });
+        assert_eq!(
+            item.claims_slice("P27"),
+            [json!({
+                "mainsnak": { "datavalue": { "type": "wikibase-entityid", "value": { "entity-type": "item", "id": "Q183" } } },
+                "qualifiers": { "P580": [qualifier] }
+            })]
+        );
+        assert!(!item.has_claims("P214"));
+        assert_eq!(
+            item.raw["labels"]["en"],
+            json!({ "value": "Douglas Adams" })
+        );
+        assert_eq!(
+            item.raw["descriptions"]["en"],
+            json!({ "value": "English author" })
+        );
+        assert_eq!(
+            item.raw["sitelinks"]["enwiki"],
+            json!({ "title": "Douglas Adams" })
+        );
+    }
+
+    #[test]
+    fn test_new_keeps_used_fields() {
+        let item = item_with_referenced_claim();
+        assert_eq!(item.get_id(), "Q42");
+        assert!(item.is_item());
+        assert_eq!(item.get_label(Some("en")), "Douglas Adams");
+        assert_eq!(item.get_desc(Some("en")), "English author");
         assert_eq!(item.get_claim_items_for_property("P27"), vec!["Q183"]);
+        assert!(item.get_wiki_links().contains_key("enwiki"));
     }
 
     #[test]
@@ -820,30 +894,6 @@ mod tests {
         assert!(links.contains_key("enwiki"));
         assert!(links.contains_key("dewiki"));
         assert!(!links.contains_key("frwiki"));
-    }
-
-    #[test]
-    fn test_get_aliases_for_language() {
-        let raw = serde_json::json!({
-            "labels": {
-                "en": { "value": "DNA" }
-            },
-            "aliases": {
-                "en": [
-                    { "value": "Douglas Noel Adams" },
-                    { "value": "D.N. Adams" }
-                ]
-            }
-        });
-        let item = WikiDataItem::new(raw);
-
-        let aliases_no_label = item.get_aliases_for_language("en", false);
-        assert_eq!(aliases_no_label.len(), 2);
-        assert!(aliases_no_label.contains(&"Douglas Noel Adams".to_string()));
-
-        let aliases_with_label = item.get_aliases_for_language("en", true);
-        assert_eq!(aliases_with_label.len(), 3);
-        assert!(aliases_with_label.contains(&"DNA".to_string()));
     }
 
     #[test]

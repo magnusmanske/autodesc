@@ -210,7 +210,7 @@ impl WikiData {
             ("ids", &ids),
             (
                 "props",
-                "info|aliases|labels|descriptions|claims|sitelinks|datatype",
+                "info|labels|descriptions|claims|sitelinks|datatype",
             ),
             ("format", "json"),
         ];

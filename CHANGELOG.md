@@ -6,6 +6,16 @@ All notable changes to the AutoDesc project.
 
 ### Changed
 
+- Cached Wikidata items take about a third less memory: besides references,
+  everything else that is never read is dropped on load (statement IDs,
+  ranks and types; snak hashes, properties, datatypes and snak types;
+  claims of external-id properties; the `language` of labels and
+  descriptions; sitelinks other than their titles), and aliases are no
+  longer fetched. `WikiDataItem::get_aliases_for_language` is removed.
+- The item cache budget is capped at 40% of the cgroup memory limit, and
+  defaults to that when `AUTODESC_ITEM_CACHE_MB` is unset. A budget larger
+  than the pod (2048 MiB in a 2 GiB pod) caused repeated OOM kills.
+
 - Uses the shared helpers of wikimisc 0.3: `QId` is replaced by
   `wikimisc::entity_id::ItemId` (re-exported as `autodesc::ItemId`; `Q0` is
   rejected and leading zeros are dropped), dates are read with

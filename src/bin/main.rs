@@ -29,6 +29,7 @@ use tower_http::compression::CompressionLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::set_header::response::SetResponseHeaderLayer;
 use wikimisc::escape;
+use wikimisc::process_stats::MemoryStats;
 use wikimisc::server::{self, jsonp};
 use wikimisc::telemetry::Telemetry;
 
@@ -91,10 +92,13 @@ impl AppState {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(3600);
-        let item_cache_mb = std::env::var("AUTODESC_ITEM_CACHE_MB")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(512);
+        let memory_limit = MemoryStats::read().limit_bytes;
+        let item_cache_mb = item_cache_mb(
+            std::env::var("AUTODESC_ITEM_CACHE_MB")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok()),
+            memory_limit,
+        );
 
         let output_ttl = std::env::var("AUTODESC_OUTPUT_CACHE_TTL_SECS")
             .ok()
@@ -117,6 +121,7 @@ impl AppState {
         tracing::info!(
             item_ttl,
             item_cache_mb,
+            memory_limit,
             output_ttl,
             output_size,
             rate_limit,
@@ -140,6 +145,36 @@ impl AppState {
             rate_limiter: IpRateLimiter::new(rate_limit, rate_window),
             start_time: Instant::now(),
         }
+    }
+}
+
+/// Item cache budget without a configured one or a known memory limit, in MiB.
+const DEFAULT_ITEM_CACHE_MB: u64 = 512;
+
+/// The largest share of the memory limit the item cache may use, in percent.
+/// The rest covers the server's RSS beyond the cache's own estimate (about
+/// 40% on top), the output cache and bursts of requests for large items.
+const ITEM_CACHE_MAX_PERCENT_OF_LIMIT: u64 = 40;
+
+/// The item cache budget in MiB: the `configured` one, but at most
+/// [`ITEM_CACHE_MAX_PERCENT_OF_LIMIT`] of the process's memory limit; without
+/// a configured budget, all of that.
+fn item_cache_mb(configured: Option<u64>, memory_limit_bytes: Option<u64>) -> u64 {
+    let Some(limit) = memory_limit_bytes else {
+        return configured.unwrap_or(DEFAULT_ITEM_CACHE_MB);
+    };
+    let max_mb = limit / 100 * ITEM_CACHE_MAX_PERCENT_OF_LIMIT / (1024 * 1024);
+    match configured {
+        Some(mb) if mb > max_mb => {
+            tracing::warn!(
+                configured_mb = mb,
+                max_mb,
+                "AUTODESC_ITEM_CACHE_MB exceeds {ITEM_CACHE_MAX_PERCENT_OF_LIMIT}% of the memory limit; capping"
+            );
+            max_mb
+        }
+        Some(mb) => mb,
+        None => max_mb,
     }
 }
 
@@ -859,6 +894,18 @@ mod tests {
 
     fn params_from_query(query: &str) -> ApiParams {
         serde_urlencoded::from_str(query).expect("query should deserialize")
+    }
+
+    #[test]
+    fn item_cache_budget_is_capped_by_memory_limit() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        // No known limit (e.g. local development): as configured, else the default.
+        assert_eq!(item_cache_mb(Some(2048), None), 2048);
+        assert_eq!(item_cache_mb(None, None), DEFAULT_ITEM_CACHE_MB);
+        // With a limit: at most 40% of it, which is also the default.
+        assert_eq!(item_cache_mb(Some(2048), Some(2 * GIB)), 819);
+        assert_eq!(item_cache_mb(Some(500), Some(2 * GIB)), 500);
+        assert_eq!(item_cache_mb(None, Some(4 * GIB)), 1638);
     }
 
     #[test]

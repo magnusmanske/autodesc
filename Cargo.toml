@@ -37,7 +37,7 @@ reqwest = { version = "0.13", features = ["json", "query"] }
 moka = { version = "0.12", features = ["future"] }
 
 # Utilities
-wikimisc = { git = "https://github.com/magnusmanske/wikimisc", features = ["date", "entity-id", "escape", "http", "logging", "server", "sparql-client", "telemetry", "title"] }
+wikimisc = { git = "https://github.com/magnusmanske/wikimisc", features = ["date", "entity-id", "escape", "http", "logging", "process-stats", "server", "sparql-client", "telemetry", "title"] }
 regex = "1"
 thiserror = "1"
 anyhow = "1"
