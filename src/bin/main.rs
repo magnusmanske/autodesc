@@ -31,7 +31,7 @@ use tower_http::set_header::response::SetResponseHeaderLayer;
 use wikimisc::escape;
 use wikimisc::process_stats::MemoryStats;
 use wikimisc::server::{self, jsonp};
-use wikimisc::telemetry::Telemetry;
+use wikimisc::telemetry;
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -768,11 +768,7 @@ fn render_html(args: &ApiParams, q: String, label: String, response: &ApiRespons
 /// Telemetry is optional: a missing token or any other error only gets logged.
 /// Signals are left to the graceful shutdown, which sends the final push.
 fn start_telemetry() -> bool {
-    Telemetry::builder("web")
-        .version(env!("CARGO_PKG_VERSION"))
-        .handle_signals(false)
-        .install_or_log()
-        .is_some()
+    telemetry::install_web(env!("CARGO_PKG_VERSION"), None)
 }
 
 /// Reports the cache sizes (and the item cache memory) once a minute.
