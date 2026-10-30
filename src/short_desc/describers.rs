@@ -1,6 +1,7 @@
 use std::sync::OnceLock;
 
 use regex::Regex;
+use wikimisc::escape;
 use wikimisc::title::ucfirst;
 
 use crate::desc_options::DescOptions;
@@ -94,12 +95,17 @@ impl ShortDescription {
             let (before, inner, after) = split_link(v)
                 .map(|(_, b, i, a)| (b, i, a))
                 .unwrap_or_else(|| (String::new(), v.to_string(), String::new()));
-            let country_q = p27_label_to_qid.get(&inner).map(String::as_str);
-            let s = self.get_nationality_from_country(&inner, country_q, lang, wd);
+            // `label_items` returns escaped labels; the nationality lookup
+            // needs the original Wikidata text.
+            let raw_inner = escape::unescape_html(&inner);
+            let country_q = p27_label_to_qid.get(raw_inner.as_ref()).map(String::as_str);
+            let s = self.get_nationality_from_country(raw_inner.as_ref(), country_q, lang, wd);
+            let s = if k > 0 { s.to_lowercase() } else { s };
+            let s = escape::html_text(&s);
             if k == 0 {
                 h2 = format!("{}{}{}", before, s, after);
             } else {
-                h2 = format!("{}-{}{}{}", h2, before, s.to_lowercase(), after);
+                h2 = format!("{}-{}{}{}", h2, before, s, after);
             }
         }
         if !h2.is_empty() {
@@ -116,12 +122,13 @@ impl ShortDescription {
                     let (before, inner, after) = split_link(label)
                         .map(|(_, b, i, a)| (b, i, a))
                         .unwrap_or_else(|| (String::new(), label.to_string(), String::new()));
-                    if let Some(q) = p106_label_to_qid.get(&inner)
+                    let raw_inner = escape::unescape_html(&inner);
+                    if let Some(q) = p106_label_to_qid.get(raw_inner.as_ref())
                         && let Some(gendered) = wd
                             .get_item_str(q)
                             .and_then(|i| i.get_gendered_label(lang, is_female))
                     {
-                        *label = format!("{}{}{}", before, gendered, after);
+                        *label = format!("{}{}{}", before, escape::html_text(&gendered), after);
                     }
                 }
             }
@@ -376,7 +383,7 @@ impl ShortDescription {
         }
 
         if let Some(name) = &taxon_name {
-            h_parts.push(format!("[{}]", name));
+            h_parts.push(format!("[{}]", escape::html_text(name)));
         }
 
         let result = ucfirst(&h_parts.join(", ")).into_owned();

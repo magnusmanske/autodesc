@@ -511,6 +511,89 @@ async fn test_long_desc_link_mode_wikipedia() {
     );
 }
 
+/// User-editable Wikidata text must be HTML-escaped in the generated result.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_long_desc_escapes_html_in_labels() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/w/api.php"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(fake_wbgetentities(fake_related_entities())),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
+    insert_item(&mut wd, "Q42", "<script>alert(1)</script>");
+
+    let sd = ShortDescription::new();
+    let mut claims = claims_male_writer_deceased();
+    claims["P513"] = json!([{
+        "mainsnak": {
+            "datavalue": { "type": "string", "value": "<img src=x onerror=alert(1)>" }
+        }
+    }]);
+    let opt = DescOptions {
+        lang: Lang::default(),
+        links: "wikidata".to_string(),
+        ..Default::default()
+    };
+
+    let desc = LongDescGenerator::generate(&sd, "Q42", &claims, &opt, &mut wd)
+        .await
+        .expect("Should produce a long description");
+
+    assert!(
+        desc.contains("<b>&lt;script&gt;alert(1)&lt;/script&gt;</b>"),
+        "Title label must be escaped: {desc}"
+    );
+    assert!(
+        desc.contains("&lt;img src=x onerror=alert(1)&gt;"),
+        "Birth name must be escaped: {desc}"
+    );
+    assert!(!desc.contains("<script>"), "No raw script tag: {desc}");
+    assert!(!desc.contains("<img"), "No raw img tag: {desc}");
+}
+
+/// Wiki link mode must escape both labels and sitelink page titles.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_long_desc_escapes_wiki_links() {
+    let mut entities = fake_related_entities();
+    entities["Q36180"]["labels"]["en"]["value"] = json!("<script>alert(1)</script>");
+    entities["Q36180"]["sitelinks"]["enwiki"]["title"] = json!("<img src=x onerror=alert(1)>");
+
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/w/api.php"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(fake_wbgetentities(entities)))
+        .mount(&mock_server)
+        .await;
+
+    let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
+    insert_item(&mut wd, "Q42", "Douglas Adams");
+
+    let sd = ShortDescription::new();
+    let claims = claims_male_writer_deceased();
+    let opt = DescOptions {
+        lang: Lang::default(),
+        links: "wiki".to_string(),
+        ..Default::default()
+    };
+
+    let desc = LongDescGenerator::generate(&sd, "Q42", &claims, &opt, &mut wd)
+        .await
+        .expect("Should produce a long description");
+
+    assert!(
+        desc.contains(
+            "[[&lt;img src=x onerror=alert(1)&gt;|&lt;script&gt;alert(1)&lt;/script&gt;]]"
+        ),
+        "Wiki page title and label must be escaped: {desc}"
+    );
+    assert!(!desc.contains("<script>"), "No raw script tag: {desc}");
+    assert!(!desc.contains("<img"), "No raw img tag: {desc}");
+}
+
 /// Multiple occupations are listed with "and" between the last two.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_long_desc_multiple_occupations() {

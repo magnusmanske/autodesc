@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 use serde_json::Value;
 use wikimisc::date::Date;
+use wikimisc::escape;
 use wikimisc::title::wiki_urlencode;
 
 use crate::desc_options::DescOptions;
@@ -344,6 +345,8 @@ fn resolve_fragments(state: &LongDescState, opt: &DescOptions, wd: &WikiData) ->
 
 /// Format a Q-id as a link according to the link mode.
 fn format_link(q: &str, label: &str, opt: &DescOptions, wd: &WikiData) -> String {
+    // Labels are user-editable Wikidata text that ends up as HTML element text.
+    let label = escape::html_text(label);
     let linktarget = if !opt.linktarget.is_empty() {
         format!(" target='{}'", opt.linktarget)
     } else {
@@ -352,7 +355,7 @@ fn format_link(q: &str, label: &str, opt: &DescOptions, wd: &WikiData) -> String
     let wiki = format!("{}wiki", opt.lang);
 
     match opt.links.as_str() {
-        "text" | "" => label.to_string(),
+        "text" | "" => label.into_owned(),
         "wikidata" => {
             format!(
                 "<a href='https://www.wikidata.org/wiki/{q}'{lt}>{label}</a>",
@@ -369,13 +372,14 @@ fn format_link(q: &str, label: &str, opt: &DescOptions, wd: &WikiData) -> String
                     .and_then(|s| s.get("title"))
                     .and_then(|t| t.as_str())
             }) {
+                let page = escape::html_text(page);
                 if page == label {
                     format!("[[{}]]", label)
                 } else {
                     format!("[[{}|{}]]", page, label)
                 }
             } else {
-                label.to_string()
+                label.into_owned()
             }
         }
         "wikipedia" => {
@@ -395,7 +399,7 @@ fn format_link(q: &str, label: &str, opt: &DescOptions, wd: &WikiData) -> String
                     label = label
                 )
             } else {
-                label.to_string()
+                label.into_owned()
             }
         }
         "reasonator" => {
@@ -407,7 +411,7 @@ fn format_link(q: &str, label: &str, opt: &DescOptions, wd: &WikiData) -> String
                 label = label
             )
         }
-        _ => label.to_string(),
+        _ => label.into_owned(),
     }
 }
 

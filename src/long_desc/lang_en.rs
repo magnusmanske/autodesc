@@ -1,4 +1,5 @@
 use serde_json::Value;
+use wikimisc::escape;
 
 use crate::short_desc::ShortDescription;
 use crate::wikidata::WikiData;
@@ -57,7 +58,7 @@ impl LangGenerator for LangEn {
         sd: &ShortDescription,
         wd: &WikiData,
     ) {
-        let label = get_main_title_label(q, wd, &state.lang);
+        let label = escape::html_text(&get_main_title_label(q, wd, &state.lang)).into_owned();
         let initial_len = state.fragments.len();
 
         let bold = if state.newline == "\n" {
@@ -89,7 +90,7 @@ impl LangGenerator for LangEn {
             } else {
                 nationality
             };
-            state.push_text(&nat);
+            state.push_text(&escape::html_text(&nat));
             if k + 1 == nationalities.len() {
                 state.push_text(" ");
             }
@@ -104,7 +105,7 @@ impl LangGenerator for LangEn {
                     .get_item_str(occ_q)
                     .and_then(|i| i.get_gendered_label(&state.lang, state.is_female))
             {
-                state.push_text(&gendered);
+                state.push_text(&escape::html_text(&gendered));
                 state.push_text(sep);
                 continue;
             }
@@ -186,7 +187,7 @@ impl LangGenerator for LangEn {
         state.push_text(&format!("{} {} born ", subj, be_past));
 
         if let Some(name) = &birthname {
-            state.push_text(&format!("<i>{}</i> ", name));
+            state.push_text(&format!("<i>{}</i> ", escape::html_text(name)));
         }
 
         if let Some(claim) = birthdate

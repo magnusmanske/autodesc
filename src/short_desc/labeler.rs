@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use wikimisc::escape;
 use wikimisc::title::wiki_urlencode;
 
 use crate::desc_options::DescOptions;
@@ -52,7 +53,9 @@ impl ShortDescription {
 
             let raw = &item.raw;
 
-            let label = {
+            // Labels are user-editable Wikidata text that ends up as HTML
+            // element text, so escape them before interpolating.
+            let label = escape::html_text(&{
                 let preferred = item.get_label(Some(use_lang));
                 if preferred != item.get_id() {
                     preferred
@@ -63,7 +66,8 @@ impl ShortDescription {
                     }
                     fallback
                 }
-            };
+            })
+            .into_owned();
 
             let p: u64 = qid_to_prop.get(q_str).copied().unwrap_or(0);
 
@@ -105,10 +109,11 @@ impl ShortDescription {
                         .and_then(|s| s.get("title"))
                         .and_then(|t| t.as_str())
                     {
-                        if sl == label {
+                        let page = escape::html_text(sl);
+                        if page == label {
                             entry.push(format!("[[{}]]", label));
                         } else {
-                            entry.push(format!("[[{}|{}]]", sl, label));
+                            entry.push(format!("[[{}|{}]]", page, label));
                         }
                     } else {
                         entry.push(label.clone());
@@ -239,5 +244,61 @@ impl ShortDescription {
             return demonym;
         }
         self.txt2(country_label, "nationality", lang)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ItemId;
+    use crate::wikidata::{WikiData, WikiDataItem};
+    use serde_json::json;
+
+    const EVIL_LABEL: &str = "<script>alert(1)</script>";
+    const EVIL_PAGE: &str = "<img src=x onerror=alert(1)>";
+
+    async fn label_for(links: &str) -> String {
+        let mut wd = WikiData::new();
+        wd.items.insert(
+            ItemId::parse_lenient("Q1").unwrap(),
+            WikiDataItem::new(json!({
+                "id": "Q1",
+                "labels": { "en": { "value": EVIL_LABEL } },
+                "sitelinks": { "enwiki": { "title": EVIL_PAGE } }
+            })),
+        );
+
+        let sd = ShortDescription::new();
+        let opt = DescOptions {
+            links: links.to_string(),
+            ..Default::default()
+        };
+        let labels = sd
+            .label_items(&[(0, "Q1".to_string())], &opt, &mut wd)
+            .await;
+        labels.get(&0).unwrap()[0].clone()
+    }
+
+    #[tokio::test]
+    async fn text_labels_are_html_escaped() {
+        let label = label_for("text").await;
+        assert_eq!(label, "&lt;script&gt;alert(1)&lt;/script&gt;");
+        assert!(!label.contains("<script>"));
+    }
+
+    #[tokio::test]
+    async fn html_link_labels_are_escaped() {
+        let label = label_for("wikidata").await;
+        assert!(label.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+        assert!(!label.contains("<script>"));
+    }
+
+    #[tokio::test]
+    async fn wiki_links_escape_page_and_label() {
+        let label = label_for("wiki").await;
+        assert!(label.contains("&lt;img src=x onerror=alert(1)&gt;"));
+        assert!(label.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+        assert!(!label.contains("<img"));
+        assert!(!label.contains("<script>"));
     }
 }
