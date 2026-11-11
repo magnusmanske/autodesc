@@ -811,3 +811,186 @@ async fn test_load_item_long_mode() {
         "Birth year in long description: {desc}"
     );
 }
+
+// ─── Date precision, circa, P793 and spouse end date regressions ──────────────
+
+/// Generate an English long description for a synthetic person with the given
+/// claims, preloading any labels the claims refer to.
+async fn generate_en(claims: Value, extra_items: &[(&str, &str)]) -> String {
+    generate_in_lang(claims, "en", extra_items).await
+}
+
+async fn generate_in_lang(claims: Value, lang: &str, extra_items: &[(&str, &str)]) -> String {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/w/api.php"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(fake_wbgetentities(fake_related_entities())),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
+    insert_item(&mut wd, "Q100", "Test Person");
+    for (id, label) in extra_items {
+        insert_item(&mut wd, id, label);
+    }
+
+    let sd = ShortDescription::new();
+    let lang = if lang == "en" {
+        Lang::default()
+    } else {
+        autodesc::lang_type::init_langs().await;
+        Lang::parse(lang).unwrap()
+    };
+    let opt = DescOptions {
+        lang,
+        links: "text".to_string(),
+        ..Default::default()
+    };
+
+    LongDescGenerator::generate(&sd, "Q100", &claims, &opt, &mut wd)
+        .await
+        .expect("long description should be produced")
+}
+
+fn claims_person() -> Value {
+    json!({
+        "P31": [{ "mainsnak": { "datavalue": { "value": { "entity-type": "item", "id": "Q5" } } } }],
+        "P21": [{ "mainsnak": { "datavalue": { "value": { "entity-type": "item", "id": "Q6581072" } } } }]
+    })
+}
+
+/// A precision-8 date of birth is a decade, not a year.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_long_desc_decade_precision() {
+    let mut claims = claims_person();
+    claims["P569"] = json!([{
+        "mainsnak": { "datavalue": { "value": { "time": "+1940-00-00T00:00:00Z", "precision": 8 } } }
+    }]);
+
+    let desc = generate_en(claims, &[]).await;
+    assert!(desc.contains("1940s"), "Decade should be rendered: {desc}");
+    assert!(
+        !desc.contains("born in 1940."),
+        "Decade must not be rendered as a plain year: {desc}"
+    );
+}
+
+/// P1480 = circa on a date of birth is rendered as "around".
+#[tokio::test(flavor = "multi_thread")]
+async fn test_long_desc_circa_qualifier() {
+    let mut claims = claims_person();
+    claims["P569"] = json!([{
+        "mainsnak": { "datavalue": { "value": { "time": "+1960-00-00T00:00:00Z", "precision": 9 } } },
+        "qualifiers": {
+            "P1480": [{ "datavalue": { "value": { "entity-type": "item", "id": "Q5727902" } } }]
+        }
+    }]);
+
+    let desc = generate_en(claims, &[]).await;
+    assert!(
+        desc.contains("around 1960"),
+        "Circa should be rendered: {desc}"
+    );
+    assert!(
+        !desc.contains("born in 1960."),
+        "Circa date must not read as exact: {desc}"
+    );
+}
+
+/// Circa and decade precision combine into "around the 1940s".
+#[tokio::test(flavor = "multi_thread")]
+async fn test_long_desc_circa_decade_combines() {
+    let mut claims = claims_person();
+    claims["P569"] = json!([{
+        "mainsnak": { "datavalue": { "value": { "time": "+1940-00-00T00:00:00Z", "precision": 8 } } },
+        "qualifiers": {
+            "P1480": [{ "datavalue": { "value": { "entity-type": "item", "id": "Q5727902" } } }]
+        }
+    }]);
+
+    let desc = generate_en(claims, &[]).await;
+    assert!(
+        desc.contains("around the 1940s"),
+        "Circa decade should combine naturally: {desc}"
+    );
+}
+
+/// P793 (significant event) must not present the subject as its agent, and a
+/// P585 point in time is included when available.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_long_desc_significant_event_not_agent() {
+    let mut claims = claims_person();
+    claims["P793"] = json!([{
+        "mainsnak": { "datavalue": { "value": { "entity-type": "item", "id": "Q201676" } } },
+        "qualifiers": {
+            "P585": [{ "datavalue": { "value": { "time": "+1934-07-06T00:00:00Z", "precision": 11 } } }]
+        }
+    }]);
+
+    let desc = generate_en(claims, &[("Q201676", "funeral")]).await;
+    assert!(
+        !desc.contains("played a role in funeral"),
+        "P793 must not invent an agent role: {desc}"
+    );
+    assert!(
+        desc.contains("funeral"),
+        "Event label should appear: {desc}"
+    );
+    assert!(
+        desc.contains("1934"),
+        "Event point in time should appear: {desc}"
+    );
+}
+
+/// A spouse end date must not be rendered as "until on <date>", while exact
+/// day-precision dates keep their existing format.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_long_desc_spouse_end_date_preposition() {
+    let mut claims = claims_person();
+    claims["P569"] = json!([{
+        "mainsnak": { "datavalue": { "value": { "time": "+1952-03-11T00:00:00Z", "precision": 11 } } }
+    }]);
+    claims["P26"] = json!([{
+        "mainsnak": { "datavalue": { "value": { "entity-type": "item", "id": "Q105" } } },
+        "qualifiers": {
+            "P580": [{ "datavalue": { "value": { "time": "+1991-11-25T00:00:00Z", "precision": 11 } } }],
+            "P582": [{ "datavalue": { "value": { "time": "+2001-05-11T00:00:00Z", "precision": 11 } } }]
+        }
+    }]);
+
+    let desc = generate_en(claims, &[("Q105", "Jane Belson")]).await;
+    assert!(!desc.contains("until on"), "No 'until on': {desc}");
+    assert!(
+        desc.contains("November 25, 1991"),
+        "Start date format: {desc}"
+    );
+    assert!(desc.contains("May 11, 2001"), "End date format: {desc}");
+    assert!(
+        desc.contains("March 11, 1952"),
+        "Day-precision birth date unchanged: {desc}"
+    );
+}
+
+/// French day-precision dates keep their existing format.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_long_desc_fr_exact_dates_unchanged() {
+    let mut claims = claims_person();
+    claims["P569"] = json!([{
+        "mainsnak": { "datavalue": { "value": { "time": "+1867-11-07T00:00:00Z", "precision": 11 } } }
+    }]);
+    claims["P570"] = json!([{
+        "mainsnak": { "datavalue": { "value": { "time": "+1934-07-04T00:00:00Z", "precision": 11 } } }
+    }]);
+
+    let desc = generate_in_lang(claims, "fr", &[]).await;
+    assert!(
+        desc.contains("7 novembre 1867"),
+        "French birth date format: {desc}"
+    );
+    assert!(
+        desc.contains("4 juillet 1934"),
+        "French death date format: {desc}"
+    );
+}

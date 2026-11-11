@@ -156,15 +156,35 @@ impl LangGenerator for LangEn {
             state.push_text(". ");
         }
 
-        // Significant events
-        let sig_events = get_claim_item_ids(claims, "P793");
-        if !sig_events.is_empty() {
-            let subj = state.pronoun_subject(&CFG);
-            state.push_text(&format!("{} played a role in ", subj));
-            for (k, ev_q) in sig_events.iter().enumerate() {
-                state.push_item(ev_q, "", get_sep_after_en(sig_events.len(), k));
+        // Significant events (P793). On a person these are typically life
+        // events such as a wedding, funeral or burial; phrasing them as "played
+        // a role in" invents an agent role. Use a possessive instead, and only
+        // include events whose point in time (P585) is known.
+        if let Some(events) = claims.get("P793").and_then(Value::as_array) {
+            let poss = state.pronoun_possessive(&CFG);
+            let mut written = false;
+            for claim in events {
+                let Some(event_q) = get_claim_item_id(claim) else {
+                    continue;
+                };
+                let Some(date) = claim
+                    .get("qualifiers")
+                    .and_then(|qs| extract_date_qualifier(qs, "P585"))
+                else {
+                    continue;
+                };
+                if written {
+                    state.push_text(" ");
+                }
+                written = true;
+                state.push_text(&format!("{} ", poss));
+                state.push_item(&event_q, "", " took place ");
+                state.push_text(&self.render_date(&date, false));
+                state.push_text(". ");
             }
-            state.push_text(".");
+            if written {
+                state.push_newline();
+            }
         }
 
         state.push_newline();
@@ -343,7 +363,7 @@ impl LangGenerator for LangEn {
                 }
                 if let Some(ref to) = item.date_to {
                     state.push_text("(married until ");
-                    state.push_text(&self.render_date(to, false));
+                    state.push_text(&self.render_date(to, true));
                     state.push_text(") ");
                 }
                 state.push_text(get_sep_after_en(spouses.len(), k));
@@ -412,41 +432,62 @@ impl LangGenerator for LangEn {
 
 impl LangEn {
     /// Render a Wikidata date as an English string.
-    /// `no_prefix`: when true, omit the "in"/"on" preposition.
+    /// `no_prefix`: when true, omit the "in"/"on" preposition. It also
+    /// suppresses the circa marker, because callers that pass `true` already
+    /// supply their own preposition or wording.
     fn render_date(&self, date: &WdDate, no_prefix: bool) -> String {
-        let Some(date) = date.parse() else {
+        let Some(kind) = date.kind() else {
             return "???".to_string();
         };
-        let year = date.year().unsigned_abs();
-        let mut result = String::new();
+        let circa = date.circa && !no_prefix;
 
-        match (date.month(), date.day()) {
-            (Some(month), Some(day)) => {
-                if !no_prefix {
-                    result.push_str("on ");
-                }
+        let value = match kind {
+            DateKind::Day { year, month, day } => {
                 let month_label = CFG.month_labels.get(usize::from(month)).unwrap_or(&"");
-                result.push_str(&format!("{} {}, {}", month_label, day, year));
+                format!(
+                    "{} {}, {}{}",
+                    month_label,
+                    day,
+                    year.unsigned_abs(),
+                    bce_suffix(year)
+                )
             }
-            (Some(month), None) => {
-                if !no_prefix {
-                    result.push_str("in ");
-                }
+            DateKind::Month { year, month } => {
                 let month_label = CFG.month_labels.get(usize::from(month)).unwrap_or(&"");
-                result.push_str(&format!("{} {}", month_label, year));
+                format!(
+                    "{} {}{}",
+                    month_label,
+                    year.unsigned_abs(),
+                    bce_suffix(year)
+                )
             }
-            _ => {
-                if !no_prefix {
-                    result.push_str("in ");
-                }
-                result.push_str(&year.to_string());
+            DateKind::Year { year } => format!("{}{}", year.unsigned_abs(), bce_suffix(year)),
+            DateKind::Decade { start, bce } => {
+                format!("the {}s{}", start, if bce { " B.C.E." } else { "" })
             }
-        }
+            DateKind::Century { number, bce } => format!(
+                "the {} century{}",
+                en_ordinal(number),
+                if bce { " B.C.E." } else { "" }
+            ),
+            DateKind::Millennium { number, bce } => format!(
+                "the {} millennium{}",
+                en_ordinal(number),
+                if bce { " B.C.E." } else { "" }
+            ),
+        };
 
-        if date.year() < 0 {
-            result.push_str(" B.C.E.");
-        }
-        result
+        let prefix = if no_prefix {
+            ""
+        } else if circa {
+            "around "
+        } else if matches!(kind, DateKind::Day { .. }) {
+            "on "
+        } else {
+            "in "
+        };
+
+        format!("{}{}", prefix, value)
     }
 
     /// Push a date range (from X until Y) in English.
@@ -461,5 +502,88 @@ impl LangEn {
             state.push_text(&self.render_date(to, true));
             state.push_text(" ");
         }
+    }
+}
+
+/// The suffix English adds to a year before the common era.
+fn bce_suffix(year: i64) -> &'static str {
+    if year < 0 { " B.C.E." } else { "" }
+}
+
+/// English ordinal numerals: 1st, 2nd, 3rd, 4th, 11th, 12th, 13th, 21st, …
+fn en_ordinal(number: i64) -> String {
+    let suffix = match (number % 100, number % 10) {
+        (11..=13, _) => "th",
+        (_, 1) => "st",
+        (_, 2) => "nd",
+        (_, 3) => "rd",
+        _ => "th",
+    };
+    format!("{}{}", number, suffix)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wd(time: &str, precision: u64, circa: bool) -> WdDate {
+        WdDate {
+            time: time.to_string(),
+            precision,
+            circa,
+        }
+    }
+
+    #[test]
+    fn render_date_uses_precision() {
+        let lang = LangEn;
+        assert_eq!(
+            lang.render_date(&wd("+1940-00-00T00:00:00Z", 8, false), false),
+            "in the 1940s"
+        );
+        assert_eq!(
+            lang.render_date(&wd("+1940-00-00T00:00:00Z", 7, false), false),
+            "in the 20th century"
+        );
+        assert_eq!(
+            lang.render_date(&wd("+1940-00-00T00:00:00Z", 6, false), false),
+            "in the 2nd millennium"
+        );
+        assert_eq!(
+            lang.render_date(&wd("+1960-00-00T00:00:00Z", 9, false), false),
+            "in 1960"
+        );
+    }
+
+    #[test]
+    fn render_date_combines_circa_and_precision() {
+        let lang = LangEn;
+        assert_eq!(
+            lang.render_date(&wd("+1960-00-00T00:00:00Z", 9, true), false),
+            "around 1960"
+        );
+        assert_eq!(
+            lang.render_date(&wd("+1940-00-00T00:00:00Z", 8, true), false),
+            "around the 1940s"
+        );
+    }
+
+    #[test]
+    fn render_date_keeps_exact_day_format() {
+        let lang = LangEn;
+        let date = wd("+1952-03-11T00:00:00Z", 11, false);
+        assert_eq!(lang.render_date(&date, false), "on March 11, 1952");
+        assert_eq!(lang.render_date(&date, true), "March 11, 1952");
+    }
+
+    #[test]
+    fn ordinal_suffixes() {
+        assert_eq!(en_ordinal(1), "1st");
+        assert_eq!(en_ordinal(2), "2nd");
+        assert_eq!(en_ordinal(3), "3rd");
+        assert_eq!(en_ordinal(11), "11th");
+        assert_eq!(en_ordinal(12), "12th");
+        assert_eq!(en_ordinal(13), "13th");
+        assert_eq!(en_ordinal(21), "21st");
     }
 }

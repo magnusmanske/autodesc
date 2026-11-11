@@ -4,6 +4,19 @@ All notable changes to the AutoDesc project.
 
 ## Unreleased
 
+### Fixed
+
+- Long descriptions render a date according to its Wikibase precision, so a
+  decade is "the 1940s" (not "1940"), a century "the 20th century" and a
+  millennium "the 2nd millennium"; a P1480 = circa qualifier now produces
+  "around" ("around the 1940s" together with decade precision).
+- P793 significant events on a person no longer read as "played a role in
+  funeral"; English phrases them possessively with their P585 date (for
+  example "Her funeral took place on July 6, 1934."), and the other
+  languages omit them.
+- A spouse end date no longer produces English "until on <date>" (and the
+  equivalent Dutch "tot op <date>").
+
 ### Changed
 
 - Cached Wikidata items take about a third less memory: besides references,

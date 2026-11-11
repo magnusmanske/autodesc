@@ -198,16 +198,9 @@ impl LangGenerator for LangDe {
             state.push_text(". ");
         }
 
-        // Significant events
-        let sig_events = get_claim_item_ids(claims, "P793");
-        if !sig_events.is_empty() {
-            let subj = state.pronoun_subject(&CFG);
-            state.push_text(&format!("{} spielte eine Rolle bei ", subj));
-            for (k, ev_q) in sig_events.iter().enumerate() {
-                state.push_item(ev_q, "", get_sep_after_de(sig_events.len(), k));
-            }
-            state.push_text(".");
-        }
+        // Significant events (P793) are not rendered: treating the subject as
+        // an agent of a life event (wedding, funeral, burial) produces wrong
+        // prose, and there is no reliable generic phrasing.
 
         state.push_newline();
     }
@@ -452,42 +445,75 @@ impl LangGenerator for LangDe {
 
 impl LangDe {
     /// Render a Wikidata date as a German string.
-    /// `no_prefix`: when true, omit the "am"/"im" preposition.
+    /// `no_prefix`: when true, omit the "am"/"im" preposition. It also
+    /// suppresses the circa marker, because callers that pass `true` already
+    /// supply their own preposition or wording.
     fn render_date(&self, date: &WdDate, no_prefix: bool) -> String {
-        let Some(date) = date.parse() else {
+        let Some(kind) = date.kind() else {
             return "???".to_string();
         };
-        let year = date.year().unsigned_abs();
-        let mut result = String::new();
+        let circa = date.circa && !no_prefix;
 
-        match (date.month(), date.day()) {
-            (Some(month), Some(day)) => {
-                if !no_prefix {
-                    result.push_str("am ");
-                }
+        let value = match kind {
+            DateKind::Day { year, month, day } => {
                 let month_label = CFG.month_labels.get(usize::from(month)).unwrap_or(&"");
-                result.push_str(&format!("{}. {} {}", day, month_label, year));
+                let article = if circa { "den " } else { "" };
+                format!(
+                    "{}{}. {} {}{}",
+                    article,
+                    day,
+                    month_label,
+                    year.unsigned_abs(),
+                    bce_suffix(year)
+                )
             }
-            (Some(month), None) => {
-                if !no_prefix {
-                    result.push_str("im ");
-                }
+            DateKind::Month { year, month } => {
                 let month_label = CFG.month_labels.get(usize::from(month)).unwrap_or(&"");
-                result.push_str(&format!("{} {}", month_label, year));
+                format!(
+                    "{} {}{}",
+                    month_label,
+                    year.unsigned_abs(),
+                    bce_suffix(year)
+                )
             }
-            _ => {
-                if !no_prefix {
-                    result.push_str("im Jahr ");
+            DateKind::Year { year } => format!("{}{}", year.unsigned_abs(), bce_suffix(year)),
+            DateKind::Decade { start, bce } => {
+                let suffix = if bce { " v. Chr." } else { "" };
+                if circa {
+                    format!("die {}er Jahre{}", start, suffix)
+                } else if no_prefix {
+                    format!("{}er Jahre{}", start, suffix)
+                } else {
+                    format!("den {}er Jahren{}", start, suffix)
                 }
-                result.push_str(&year.to_string());
             }
-        }
+            DateKind::Century { number, bce } => {
+                let suffix = if bce { " v. Chr." } else { "" };
+                let article = if circa { "das " } else { "" };
+                format!("{}{}. Jahrhundert{}", article, number, suffix)
+            }
+            DateKind::Millennium { number, bce } => {
+                let suffix = if bce { " v. Chr." } else { "" };
+                let article = if circa { "das " } else { "" };
+                format!("{}{}. Jahrtausend{}", article, number, suffix)
+            }
+        };
 
-        if date.year() < 0 {
-            result.push_str(" v. Chr.");
-        }
+        let prefix = if no_prefix {
+            ""
+        } else if circa {
+            "um "
+        } else {
+            match kind {
+                DateKind::Day { .. } => "am ",
+                DateKind::Month { .. } => "im ",
+                DateKind::Year { .. } => "im Jahr ",
+                DateKind::Decade { .. } => "in ",
+                DateKind::Century { .. } | DateKind::Millennium { .. } => "im ",
+            }
+        };
 
-        result
+        format!("{}{}", prefix, value)
     }
 
     /// Push a date range (von X bis Y) in German.
@@ -503,4 +529,9 @@ impl LangDe {
             state.push_text(" ");
         }
     }
+}
+
+/// The suffix German adds to a year before the common era.
+fn bce_suffix(year: i64) -> &'static str {
+    if year < 0 { " v. Chr." } else { "" }
 }

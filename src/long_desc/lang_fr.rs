@@ -167,16 +167,9 @@ impl LangGenerator for LangFr {
             state.push_text(". ");
         }
 
-        // Significant events
-        let sig_events = get_claim_item_ids(claims, "P793");
-        if !sig_events.is_empty() {
-            let subj = state.pronoun_subject(&CFG);
-            state.push_text(&format!("{} a joué un rôle important dans ", subj));
-            for (k, ev_q) in sig_events.iter().enumerate() {
-                state.push_item(ev_q, "", get_sep_after_fr(sig_events.len(), k));
-            }
-            state.push_text(".");
-        }
+        // Significant events (P793) are not rendered: treating the subject as
+        // an agent of a life event (wedding, funeral, burial) produces wrong
+        // prose, and there is no reliable generic phrasing.
 
         state.push_newline();
     }
@@ -436,34 +429,71 @@ impl LangFr {
     /// Render a Wikidata date as a French string.
     /// `jusque`: when true, use "jusqu'en"/"jusqu'au" instead of "en"/"le".
     fn render_date(&self, date: &WdDate, jusque: bool) -> String {
-        let Some(date) = date.parse() else {
+        let Some(kind) = date.kind() else {
             return "???".to_string();
         };
-        let year = date.year().unsigned_abs();
-        let mut result = String::new();
+        let circa = date.circa && !jusque;
 
-        match (date.month(), date.day()) {
-            (Some(month), Some(day)) => {
-                result.push_str(if jusque { "jusqu'au " } else { "le " });
+        let value = match kind {
+            DateKind::Day { year, month, day } => {
                 let month_label = CFG.month_labels.get(usize::from(month)).unwrap_or(&"");
-                result.push_str(&format!("{} {} {}", day, month_label, year));
+                format!(
+                    "{} {} {}{}",
+                    day,
+                    month_label,
+                    year.unsigned_abs(),
+                    bce_suffix(year)
+                )
             }
-            (Some(month), None) => {
-                result.push_str(if jusque { "jusqu'en " } else { "en " });
+            DateKind::Month { year, month } => {
                 let month_label = CFG.month_labels.get(usize::from(month)).unwrap_or(&"");
-                result.push_str(&format!("{} {}", month_label, year));
+                format!(
+                    "{} {}{}",
+                    month_label,
+                    year.unsigned_abs(),
+                    bce_suffix(year)
+                )
             }
-            _ => {
-                result.push_str(if jusque { "jusqu'en " } else { "en " });
-                result.push_str(&year.to_string());
+            DateKind::Year { year } => format!("{}{}", year.unsigned_abs(), bce_suffix(year)),
+            DateKind::Decade { start, bce } => {
+                format!("années {}{}", start, if bce { " av. J.-C." } else { "" })
             }
-        }
+            DateKind::Century { number, bce } => {
+                format!("{}e siècle{}", number, if bce { " av. J.-C." } else { "" })
+            }
+            DateKind::Millennium { number, bce } => format!(
+                "{}e millénaire{}",
+                number,
+                if bce { " av. J.-C." } else { "" }
+            ),
+        };
 
-        if date.year() < 0 {
-            result.push_str(" av. J.-C.");
-        }
+        let prefix = if jusque {
+            match kind {
+                DateKind::Day { .. } | DateKind::Century { .. } | DateKind::Millennium { .. } => {
+                    "jusqu'au "
+                }
+                DateKind::Month { .. } | DateKind::Year { .. } => "jusqu'en ",
+                DateKind::Decade { .. } => "jusqu'aux ",
+            }
+        } else if circa {
+            match kind {
+                DateKind::Day { .. } | DateKind::Century { .. } | DateKind::Millennium { .. } => {
+                    "vers le "
+                }
+                DateKind::Decade { .. } => "vers les ",
+                _ => "vers ",
+            }
+        } else {
+            match kind {
+                DateKind::Day { .. } => "le ",
+                DateKind::Month { .. } | DateKind::Year { .. } => "en ",
+                DateKind::Decade { .. } => "dans les ",
+                DateKind::Century { .. } | DateKind::Millennium { .. } => "au ",
+            }
+        };
 
-        result
+        format!("{}{}", prefix, value)
     }
 
     /// Push a date range in French.
@@ -477,4 +507,9 @@ impl LangFr {
             state.push_text(" ");
         }
     }
+}
+
+/// The suffix French adds to a year before the common era.
+fn bce_suffix(year: i64) -> &'static str {
+    if year < 0 { " av. J.-C." } else { "" }
 }

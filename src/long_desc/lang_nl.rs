@@ -156,16 +156,9 @@ impl LangGenerator for LangNl {
             state.push_text(". ");
         }
 
-        // Significant events
-        let sig_events = get_claim_item_ids(claims, "P793");
-        if !sig_events.is_empty() {
-            let subj = state.pronoun_subject(&CFG);
-            state.push_text(&format!("{} speelde een rol in ", subj));
-            for (k, ev_q) in sig_events.iter().enumerate() {
-                state.push_item(ev_q, "", get_sep_after_nl(sig_events.len(), k));
-            }
-            state.push_text(".");
-        }
+        // Significant events (P793) are not rendered: treating the subject as
+        // an agent of a life event (wedding, funeral, burial) produces wrong
+        // prose, and there is no reliable generic phrasing.
 
         state.push_newline();
     }
@@ -327,7 +320,7 @@ impl LangGenerator for LangNl {
                 }
                 if let Some(ref to) = item.date_to {
                     state.push_text("(getrouwd tot ");
-                    state.push_text(&self.render_date(to, false));
+                    state.push_text(&self.render_date(to, true));
                     state.push_text(") ");
                 }
                 state.push_text(get_sep_after_nl(spouses.len(), k));
@@ -395,42 +388,60 @@ impl LangGenerator for LangNl {
 
 impl LangNl {
     /// Render a Wikidata date as a Dutch string.
-    /// `no_prefix`: when true, omit the "in"/"op" preposition.
+    /// `no_prefix`: when true, omit the "in"/"op" preposition. It also
+    /// suppresses the circa marker, because callers that pass `true` already
+    /// supply their own preposition or wording.
     fn render_date(&self, date: &WdDate, no_prefix: bool) -> String {
-        let Some(date) = date.parse() else {
+        let Some(kind) = date.kind() else {
             return "???".to_string();
         };
-        let year = date.year().unsigned_abs();
-        let mut result = String::new();
+        let circa = date.circa && !no_prefix;
 
-        match (date.month(), date.day()) {
-            (Some(month), Some(day)) => {
-                if !no_prefix {
-                    result.push_str("op ");
-                }
+        let value = match kind {
+            DateKind::Day { year, month, day } => {
                 let month_label = CFG.month_labels.get(usize::from(month)).unwrap_or(&"");
-                result.push_str(&format!("{} {} {}", day, month_label, year));
+                format!(
+                    "{} {} {}{}",
+                    day,
+                    month_label,
+                    year.unsigned_abs(),
+                    bce_suffix(year)
+                )
             }
-            (Some(month), None) => {
-                if !no_prefix {
-                    result.push_str("in ");
-                }
+            DateKind::Month { year, month } => {
                 let month_label = CFG.month_labels.get(usize::from(month)).unwrap_or(&"");
-                result.push_str(&format!("{} {}", month_label, year));
+                format!(
+                    "{} {}{}",
+                    month_label,
+                    year.unsigned_abs(),
+                    bce_suffix(year)
+                )
             }
-            _ => {
-                if !no_prefix {
-                    result.push_str("in ");
-                }
-                result.push_str(&year.to_string());
+            DateKind::Year { year } => format!("{}{}", year.unsigned_abs(), bce_suffix(year)),
+            DateKind::Decade { start, bce } => {
+                format!("de jaren {}{}", start, if bce { " v. Chr." } else { "" })
             }
-        }
+            DateKind::Century { number, bce } => {
+                format!("de {}e eeuw{}", number, if bce { " v. Chr." } else { "" })
+            }
+            DateKind::Millennium { number, bce } => format!(
+                "het {}e millennium{}",
+                number,
+                if bce { " v. Chr." } else { "" }
+            ),
+        };
 
-        if date.year() < 0 {
-            result.push_str(" v. Chr.");
-        }
+        let prefix = if no_prefix {
+            ""
+        } else if circa {
+            "rond "
+        } else if matches!(kind, DateKind::Day { .. }) {
+            "op "
+        } else {
+            "in "
+        };
 
-        result
+        format!("{}{}", prefix, value)
     }
 
     /// Push a date range (van X tot Y) in Dutch.
@@ -446,4 +457,9 @@ impl LangNl {
             state.push_text(" ");
         }
     }
+}
+
+/// The suffix Dutch adds to a year before the common era.
+fn bce_suffix(year: i64) -> &'static str {
+    if year < 0 { " v. Chr." } else { "" }
 }

@@ -36,6 +36,8 @@ pub(super) enum Fragment {
 pub(super) struct WdDate {
     pub(super) time: String,
     pub(super) precision: u64,
+    /// Whether the statement carries a P1480 = circa (Q5727902) qualifier.
+    pub(super) circa: bool,
 }
 
 impl WdDate {
@@ -46,10 +48,81 @@ impl WdDate {
             .or_else(|_| Date::from_wikibase(&self.time, PRECISION_YEAR))
             .ok()
     }
+
+    /// What the precision says this date denotes: a day, a month, a year, a
+    /// decade, a century or a millennium. Rendering stays language-specific;
+    /// this keeps the precision arithmetic in one place.
+    pub(super) fn kind(&self) -> Option<DateKind> {
+        let date = self.parse()?;
+        let year = date.year();
+        let bce = year < 0;
+        // Wikibase has no year 0, and BCE years are counted from 1.
+        let abs_year = i64::try_from(year.unsigned_abs().max(1)).ok()?;
+        match date.precision() {
+            PRECISION_DECADE => Some(DateKind::Decade {
+                start: (abs_year / 10) * 10,
+                bce,
+            }),
+            PRECISION_CENTURY => Some(DateKind::Century {
+                number: (abs_year - 1) / 100 + 1,
+                bce,
+            }),
+            p if p <= PRECISION_MILLENNIUM => Some(DateKind::Millennium {
+                number: (abs_year - 1) / 1000 + 1,
+                bce,
+            }),
+            _ => match (date.month(), date.day()) {
+                (Some(month), Some(day)) => Some(DateKind::Day { year, month, day }),
+                (Some(month), None) => Some(DateKind::Month { year, month }),
+                _ => Some(DateKind::Year { year }),
+            },
+        }
+    }
+}
+
+/// The granularity a [`WdDate`] denotes, with the arithmetic already applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DateKind {
+    Day {
+        year: i64,
+        month: u8,
+        day: u8,
+    },
+    Month {
+        year: i64,
+        month: u8,
+    },
+    Year {
+        year: i64,
+    },
+    /// A decade; `start` is the first year (1940 for the 1940s).
+    Decade {
+        start: i64,
+        bce: bool,
+    },
+    /// A century, numbered from 1 because there is no year 0.
+    Century {
+        number: i64,
+        bce: bool,
+    },
+    /// A millennium, numbered from 1 because there is no year 0.
+    Millennium {
+        number: i64,
+        bce: bool,
+    },
 }
 
 /// The Wikibase time precision of a year.
 const PRECISION_YEAR: u64 = 9;
+/// The Wikibase time precision of a decade.
+const PRECISION_DECADE: u64 = 8;
+/// The Wikibase time precision of a century.
+const PRECISION_CENTURY: u64 = 7;
+/// The Wikibase time precision of a millennium.
+const PRECISION_MILLENNIUM: u64 = 6;
+
+/// The Wikidata item for "circa", the P1480 value this code understands.
+const CIRCA_ITEM_ID: &str = "Q5727902";
 
 /// An item with optional date qualifiers (start/end).
 #[derive(Debug, Clone)]
@@ -491,6 +564,11 @@ fn add_qualifier_items(claims: &Value, prop: &str, qual_prop: &str, items: &mut 
     }
 }
 
+/// Get the target item Q-id of a single statement.
+pub(super) fn get_claim_item_id(claim: &Value) -> Option<String> {
+    WikiDataItem::get_claim_target_item_id(claim)
+}
+
 /// Get the first claim target item Q-id for a property.
 pub(super) fn get_first_claim_item(claims: &Value, prop: &str) -> Option<String> {
     let arr = claims.get(prop)?.as_array()?;
@@ -592,22 +670,53 @@ pub(super) fn get_dated_items(
     result
 }
 
-/// Extract a date from a qualifier.
+/// Extract a date from a qualifier, including a P1480 = circa qualifier on the
+/// same statement.
 pub(super) fn extract_date_qualifier(qualifiers: &Value, prop: &str) -> Option<WdDate> {
     let arr = qualifiers.get(prop)?.as_array()?;
     let first = arr.first()?;
     let dv = first.get("datavalue")?.get("value")?;
     let time = dv.get("time")?.as_str()?.to_string();
-    let precision = dv.get("precision")?.as_u64().unwrap_or(9);
-    Some(WdDate { time, precision })
+    let precision = dv.get("precision")?.as_u64().unwrap_or(PRECISION_YEAR);
+    Some(WdDate {
+        time,
+        precision,
+        circa: has_circa_qualifier(qualifiers),
+    })
 }
 
-/// Extract a WdDate from a claim's mainsnak time value.
+/// Extract a WdDate from a claim's mainsnak time value. A P1480 = circa
+/// qualifier on the statement is carried along.
 pub(super) fn extract_claim_date(claim: &Value) -> Option<WdDate> {
     let value = claim.get("mainsnak")?.get("datavalue")?.get("value")?;
     let time = value.get("time")?.as_str()?.to_string();
-    let precision = value.get("precision")?.as_u64().unwrap_or(9);
-    Some(WdDate { time, precision })
+    let precision = value.get("precision")?.as_u64().unwrap_or(PRECISION_YEAR);
+    let circa = claim.get("qualifiers").is_some_and(has_circa_qualifier);
+    Some(WdDate {
+        time,
+        precision,
+        circa,
+    })
+}
+
+/// Whether the qualifiers of a statement include P1480 = circa (Q5727902).
+fn has_circa_qualifier(qualifiers: &Value) -> bool {
+    qualifiers
+        .get("P1480")
+        .and_then(Value::as_array)
+        .is_some_and(|values| values.iter().any(is_circa_value))
+}
+
+/// Whether a single P1480 qualifier value is the item "circa".
+fn is_circa_value(qualifier: &Value) -> bool {
+    let Some(value) = qualifier.get("datavalue").and_then(|dv| dv.get("value")) else {
+        return false;
+    };
+    if let Some(id) = value.get("id").and_then(Value::as_str) {
+        id == CIRCA_ITEM_ID
+    } else {
+        value.get("numeric-id").and_then(Value::as_u64) == Some(5_727_902)
+    }
 }
 
 /// Get the claim target string value (e.g. for birth name P513).
@@ -769,6 +878,42 @@ mod tests {
         let date = extract_claim_date(&claim).unwrap();
         assert_eq!(date.time, "+1952-03-11T00:00:00Z");
         assert_eq!(date.precision, 11);
+        assert!(!date.circa);
+    }
+
+    #[test]
+    fn test_extract_claim_date_circa_qualifier() {
+        let claim = serde_json::json!({
+            "mainsnak": {
+                "datavalue": {
+                    "value": { "time": "+1960-00-00T00:00:00Z", "precision": 9 }
+                }
+            },
+            "qualifiers": {
+                "P1480": [{
+                    "datavalue": { "value": { "id": "Q5727902" } }
+                }]
+            }
+        });
+        let date = extract_claim_date(&claim).unwrap();
+        assert!(date.circa);
+    }
+
+    #[test]
+    fn test_extract_claim_date_other_p1480_value_is_not_circa() {
+        let claim = serde_json::json!({
+            "mainsnak": {
+                "datavalue": {
+                    "value": { "time": "+1960-00-00T00:00:00Z", "precision": 9 }
+                }
+            },
+            "qualifiers": {
+                "P1480": [{
+                    "datavalue": { "value": { "id": "Q18122778" } }
+                }]
+            }
+        });
+        assert!(!extract_claim_date(&claim).unwrap().circa);
     }
 
     #[test]
@@ -843,6 +988,7 @@ mod tests {
         WdDate {
             time: time.to_string(),
             precision,
+            circa: false,
         }
     }
 
@@ -873,6 +1019,84 @@ mod tests {
     fn test_parse_date_invalid() {
         assert!(wd_date("not-a-date", 9).parse().is_none());
         assert!(wd_date("", 9).parse().is_none());
+    }
+
+    #[test]
+    fn test_kind_decade() {
+        assert_eq!(
+            wd_date("+1940-00-00T00:00:00Z", 8).kind(),
+            Some(DateKind::Decade {
+                start: 1940,
+                bce: false
+            })
+        );
+    }
+
+    #[test]
+    fn test_kind_year_and_day_unchanged() {
+        assert_eq!(
+            wd_date("+1960-00-00T00:00:00Z", 9).kind(),
+            Some(DateKind::Year { year: 1960 })
+        );
+        assert_eq!(
+            wd_date("+1960-07-06T00:00:00Z", 11).kind(),
+            Some(DateKind::Day {
+                year: 1960,
+                month: 7,
+                day: 6
+            })
+        );
+    }
+
+    #[test]
+    fn test_kind_century_has_no_year_zero() {
+        // 1901–2000 is the 20th century.
+        assert_eq!(
+            wd_date("+1940-00-00T00:00:00Z", 7).kind(),
+            Some(DateKind::Century {
+                number: 20,
+                bce: false
+            })
+        );
+        assert_eq!(
+            wd_date("+1900-00-00T00:00:00Z", 7).kind(),
+            Some(DateKind::Century {
+                number: 19,
+                bce: false
+            })
+        );
+        assert_eq!(
+            wd_date("-0001-00-00T00:00:00Z", 7).kind(),
+            Some(DateKind::Century {
+                number: 1,
+                bce: true
+            })
+        );
+    }
+
+    #[test]
+    fn test_kind_millennium() {
+        assert_eq!(
+            wd_date("+1940-00-00T00:00:00Z", 6).kind(),
+            Some(DateKind::Millennium {
+                number: 2,
+                bce: false
+            })
+        );
+        assert_eq!(
+            wd_date("+2000-00-00T00:00:00Z", 6).kind(),
+            Some(DateKind::Millennium {
+                number: 2,
+                bce: false
+            })
+        );
+        assert_eq!(
+            wd_date("+2001-00-00T00:00:00Z", 6).kind(),
+            Some(DateKind::Millennium {
+                number: 3,
+                bce: false
+            })
+        );
     }
 
     // ── LongDescState pronouns / be-verbs ─────────────────────────────────────
