@@ -267,7 +267,7 @@ impl WikiData {
 
     /// GETs `url` with `params` and parses the JSON answer, retrying failures
     /// that may go away on their own.
-    async fn fetch_json<T: DeserializeOwned>(
+    async fn fetch_json<T: DeserializeOwned + Send + 'static>(
         &self,
         url: &str,
         params: &[(&str, &str)],
