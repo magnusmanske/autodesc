@@ -82,6 +82,10 @@ impl LangGenerator for LangDe {
         };
         state.push_text(&bold);
 
+        // German Wikipedia puts birth and death details right after the name,
+        // using the genealogical signs: (* 21. März 1685 in Eisenach; † …).
+        let has_bio = self.push_biographical_parenthetical(state, claims);
+
         let be = if state.is_dead { "war" } else { "ist" };
         let article = if state.is_male {
             "ein "
@@ -157,6 +161,9 @@ impl LangGenerator for LangDe {
         if !has_first_sentence {
             state.fragments.truncate(initial_len);
         }
+        // If the intro sentence was dropped, the parenthetical went with it;
+        // the birth/death sections must then render the dates themselves.
+        state.bio_in_lead = has_bio && has_first_sentence;
 
         // Schaffensperiode (P1317: floruit, P2031: Beginn, P2032: Ende)
         let floruit = claims
@@ -212,53 +219,62 @@ impl LangGenerator for LangDe {
             .and_then(|a| a.first());
         let birthplace = get_first_claim_item(claims, "P19");
         let birthname = get_first_claim_string(claims, "P513");
+        let father = get_first_claim_item(claims, "P22");
+        let mother = get_first_claim_item(claims, "P25");
+        let has_parents = father.is_some() || mother.is_some();
+        let has_date_or_place = birthdate.is_some() || birthplace.is_some();
 
-        if birthdate.is_none() && birthplace.is_none() && birthname.is_none() {
+        // Date and place may already be in the opening parenthetical; without
+        // any remaining detail there is nothing left to say here.
+        if birthname.is_none() && !has_parents && (state.bio_in_lead || !has_date_or_place) {
             return;
         }
 
         let subj = state.pronoun_subject(&CFG);
-        state.push_text(&format!("{} wurde ", subj));
 
         if let Some(name) = &birthname {
-            state.push_text(&format!("als <i>{}</i> ", escape::html_text(name)));
-        }
-
-        if let Some(claim) = birthdate
-            && let Some(date) = extract_claim_date(claim)
-        {
-            state.push_text(&self.render_date(&date, false));
-            state.push_text(" ");
-        }
-
-        if let Some(ref place_q) = birthplace {
-            state.push_item(place_q, "in ", " ");
-        }
-
-        // Parents
-        let father = get_first_claim_item(claims, "P22");
-        let mother = get_first_claim_item(claims, "P25");
-        if father.is_some() || mother.is_some() {
-            let child_of = if state.is_male {
-                "als Sohn von "
-            } else if state.is_female {
-                "als Tochter von "
-            } else {
-                "als Kind von "
-            };
-            state.push_text(child_of);
-            if let Some(ref f) = father {
-                state.push_item(f, "", " ");
+            state.push_text(&format!(
+                "{} wurde als <i>{}</i>",
+                subj,
+                escape::html_text(name)
+            ));
+            if !state.bio_in_lead {
+                state.push_text(" ");
+                self.push_birth_date_and_place(state, birthdate, birthplace.as_deref());
             }
-            if father.is_some() && mother.is_some() {
-                state.push_text("und ");
+            state.push_text(" geboren.");
+            if has_parents {
+                let possessive = if state.is_female {
+                    "Ihre"
+                } else if state.is_male {
+                    "Seine"
+                } else {
+                    "Seine/Ihre"
+                };
+                state.push_text(&format!(" {} Eltern waren ", possessive));
+                self.push_parents(state, father.as_deref(), mother.as_deref());
+                state.push_text(".");
             }
-            if let Some(ref m) = mother {
-                state.push_item(m, "", " ");
+        } else {
+            state.push_text(&format!("{} wurde ", subj));
+            if !state.bio_in_lead {
+                self.push_birth_date_and_place(state, birthdate, birthplace.as_deref());
             }
+            if has_parents {
+                let child_of = if state.is_male {
+                    "als Sohn von "
+                } else if state.is_female {
+                    "als Tochter von "
+                } else {
+                    "als Kind von "
+                };
+                state.push_text(child_of);
+                self.push_parents(state, father.as_deref(), mother.as_deref());
+            }
+            state.push_text("geboren.");
         }
 
-        state.push_text("geboren. ");
+        state.push_text(" ");
         state.push_newline();
     }
 
@@ -407,7 +423,13 @@ impl LangGenerator for LangDe {
         let has_deathcause = has_claims(claims, "P509");
         let has_killer = has_claims(claims, "P157");
 
-        if deathdate.is_some() || deathplace.is_some() || has_deathcause || has_killer {
+        // If the death data is already in the opening parenthetical, only
+        // render what adds something (cause of death, killer).
+        let render_death_sentence = has_deathcause
+            || has_killer
+            || (!state.bio_in_lead && (deathdate.is_some() || deathplace.is_some()));
+
+        if render_death_sentence {
             let subj = state.pronoun_subject(&CFG);
             state.push_text(&format!("{} starb ", subj));
 
@@ -421,15 +443,17 @@ impl LangGenerator for LangDe {
                 push_simple_list(state, &killers, "durch ", " ", get_sep_after_de);
             }
 
-            if let Some(claim) = deathdate
-                && let Some(date) = extract_claim_date(claim)
-            {
-                state.push_text(&self.render_date(&date, false));
-                state.push_text(" ");
-            }
+            if !state.bio_in_lead {
+                if let Some(claim) = deathdate
+                    && let Some(date) = extract_claim_date(claim)
+                {
+                    state.push_text(&self.render_date(&date, false));
+                    state.push_text(" ");
+                }
 
-            if let Some(ref place_q) = deathplace {
-                state.push_item(place_q, "in ", " ");
+                if let Some(ref place_q) = deathplace {
+                    state.push_item(place_q, "in ", " ");
+                }
             }
 
             state.push_text(". ");
@@ -444,6 +468,122 @@ impl LangGenerator for LangDe {
 }
 
 impl LangDe {
+    /// Push the German Wikipedia–style birth/death parenthetical directly
+    /// after the bold name, e.g.
+    /// `(* 21. März 1685 in Eisenach; † 28. Juli 1750 in Leipzig)`.
+    /// Returns `true` if anything was written.
+    fn push_biographical_parenthetical(&self, state: &mut LongDescState, claims: &Value) -> bool {
+        let birthdate = first_claim_date(claims, "P569");
+        let deathdate = first_claim_date(claims, "P570");
+        let birthplace = get_first_claim_item(claims, "P19");
+        let deathplace = get_first_claim_item(claims, "P20");
+
+        if birthdate.is_none()
+            && deathdate.is_none()
+            && birthplace.is_none()
+            && deathplace.is_none()
+        {
+            return false;
+        }
+
+        state.push_text("(");
+        let mut wrote = false;
+
+        if birthdate.is_some() || birthplace.is_some() {
+            state.push_text("* ");
+            self.push_date_and_place(state, birthdate.as_ref(), birthplace.as_deref(), false);
+            wrote = true;
+        }
+
+        if deathdate.is_some() || deathplace.is_some() {
+            if wrote {
+                state.push_text("; ");
+            }
+            state.push_text("† ");
+            let same_place = birthplace.is_some() && birthplace == deathplace;
+            self.push_date_and_place(state, deathdate.as_ref(), deathplace.as_deref(), same_place);
+            wrote = true;
+        }
+
+        state.push_text(") ");
+        wrote
+    }
+
+    /// Push a date followed by its place ("in …"), or "ebenda" when the
+    /// death place equals the birth place.
+    fn push_date_and_place(
+        &self,
+        state: &mut LongDescState,
+        date: Option<&WdDate>,
+        place: Option<&str>,
+        same_place_as_birth: bool,
+    ) {
+        let mut wrote = false;
+        if let Some(date) = date {
+            state.push_text(&self.render_biographical_date(date));
+            wrote = true;
+        }
+        if same_place_as_birth {
+            if wrote {
+                state.push_text(" ");
+            }
+            state.push_text("ebenda");
+        } else if let Some(q) = place {
+            if wrote {
+                state.push_text(" ");
+            }
+            state.push_item(q, "in ", "");
+        }
+    }
+
+    /// Render a date for the biographical parenthetical: no "am"/"im"
+    /// preposition, but "um" for an approximate (circa) date.
+    fn render_biographical_date(&self, date: &WdDate) -> String {
+        let rendered = self.render_date(date, true);
+        if !date.circa {
+            return rendered;
+        }
+        match date.kind() {
+            Some(DateKind::Decade { .. }) => format!("um die {}", rendered),
+            Some(DateKind::Century { .. }) | Some(DateKind::Millennium { .. }) => {
+                format!("um das {}", rendered)
+            }
+            _ => format!("um {}", rendered),
+        }
+    }
+
+    /// Push the birth date and place for the prose fallback (used when the
+    /// parenthetical is not part of the output).
+    fn push_birth_date_and_place(
+        &self,
+        state: &mut LongDescState,
+        birthdate: Option<&Value>,
+        birthplace: Option<&str>,
+    ) {
+        if let Some(claim) = birthdate
+            && let Some(date) = extract_claim_date(claim)
+        {
+            state.push_text(&self.render_date(&date, false));
+            state.push_text(" ");
+        }
+        if let Some(place_q) = birthplace {
+            state.push_item(place_q, "in ", " ");
+        }
+    }
+
+    /// Push "A und B" for a pair of parents.
+    fn push_parents(&self, state: &mut LongDescState, father: Option<&str>, mother: Option<&str>) {
+        if let Some(f) = father {
+            state.push_item(f, "", " ");
+        }
+        if father.is_some() && mother.is_some() {
+            state.push_text("und ");
+        }
+        if let Some(m) = mother {
+            state.push_item(m, "", " ");
+        }
+    }
+
     /// Render a Wikidata date as a German string.
     /// `no_prefix`: when true, omit the "am"/"im" preposition. It also
     /// suppresses the circa marker, because callers that pass `true` already
@@ -529,6 +669,15 @@ impl LangDe {
             state.push_text(" ");
         }
     }
+}
+
+/// Extract the first date value of a property, if present.
+fn first_claim_date(claims: &Value, prop: &str) -> Option<WdDate> {
+    claims
+        .get(prop)
+        .and_then(Value::as_array)
+        .and_then(|claims| claims.first())
+        .and_then(extract_claim_date)
 }
 
 /// The suffix German adds to a year before the common era.

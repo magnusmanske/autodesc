@@ -105,6 +105,15 @@ Long prose descriptions are generated for **people** only, currently in four lan
 
 They include, where available: nationality, occupation, birth and death details, education, career positions, family, and burial place. If a language doesn't support long descriptions, the response falls back to the short format.
 
+German descriptions follow the German Wikipedia convention for biographical
+leads, putting the dates directly after the name with the genealogical signs
+(`*` born, `†` died) and using "ebenda" when the death place is the same as the
+birth place:
+
+```
+**Johann Sebastian Bach** (* 21. März 1685 in Eisenach; † 28. Juli 1750 in Leipzig) war ein deutscher Komponist …
+```
+
 ## Using as a library
 
 `autodesc` is also a regular Rust crate. The main types you'll care about:

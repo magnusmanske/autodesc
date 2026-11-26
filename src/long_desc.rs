@@ -154,6 +154,10 @@ pub(super) struct LongDescState {
     pub(super) is_male: bool,
     pub(super) is_female: bool,
     pub(super) is_dead: bool,
+    /// Whether birth/death data was already rendered in the opening sentence
+    /// (e.g. the German `(* …; † …)` parenthetical), so later sections must
+    /// not repeat it.
+    pub(super) bio_in_lead: bool,
     pub(super) fragments: Vec<Fragment>,
     pub(super) newline: String,
 }
@@ -311,6 +315,7 @@ impl LongDescGenerator {
             is_male,
             is_female,
             is_dead,
+            bio_in_lead: false,
             fragments: Vec::new(),
             newline,
         };
@@ -1137,6 +1142,7 @@ mod tests {
             is_male,
             is_female,
             is_dead,
+            bio_in_lead: false,
             fragments: Vec::new(),
             newline: "\n".to_string(),
         }

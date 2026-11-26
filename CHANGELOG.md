@@ -4,6 +4,14 @@ All notable changes to the AutoDesc project.
 
 ## Unreleased
 
+### Added
+
+- German long descriptions now use the German Wikipedia–style birth/death
+  parenthetical with the genealogical signs, for example
+  `(* 21. März 1685 in Eisenach; † 28. Juli 1750 in Leipzig)`. When the death
+  place is the same as the birth place it is rendered as "ebenda". The birth
+  and death sections no longer repeat the date and place.
+
 ### Fixed
 
 - Long descriptions render a date according to its Wikibase precision, so a

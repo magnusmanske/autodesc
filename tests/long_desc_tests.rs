@@ -41,6 +41,28 @@ fn fake_item_with_sitelink(id: &str, label_en: &str, enwiki_title: &str) -> Valu
     })
 }
 
+/// An item with an explicit set of labels, e.g. `&[("en", "London"), ("de", "London")]`.
+fn fake_item_with_labels(id: &str, labels: &[(&str, &str)]) -> Value {
+    let labels: serde_json::Map<String, Value> = labels
+        .iter()
+        .map(|(lang, value)| {
+            (
+                (*lang).to_string(),
+                json!({ "language": lang, "value": value }),
+            )
+        })
+        .collect();
+    json!({
+        "type": "item",
+        "id": id,
+        "ns": 0,
+        "labels": labels,
+        "descriptions": {},
+        "claims": {},
+        "sitelinks": {}
+    })
+}
+
 // Fake related-items response used by most tests.
 fn fake_related_entities() -> Value {
     json!({
@@ -854,6 +876,78 @@ async fn generate_in_lang(claims: Value, lang: &str, extra_items: &[(&str, &str)
         .expect("long description should be produced")
 }
 
+/// German entities needed by the German long-description tests.
+fn fake_german_entities() -> Value {
+    json!({
+        "Q183": fake_item_with_labels("Q183", &[("en", "Germany"), ("de", "Deutschland")]),
+        "Q84": fake_item_with_labels("Q84", &[("en", "London"), ("de", "London")]),
+        "Q350": fake_item_with_labels("Q350", &[("en", "Cambridge"), ("de", "Cambridge")]),
+        "Q36180": fake_item_with_labels("Q36180", &[("en", "writer"), ("de", "Schriftsteller")]),
+        "Q12152": fake_item_with_labels("Q12152", &[("en", "heart attack"), ("de", "Herzinfarkt")]),
+        "Q5": fake_item_with_labels("Q5", &[("en", "human"), ("de", "Mensch")]),
+        "Q6581097": fake_item_with_labels("Q6581097", &[("en", "male"), ("de", "männlich")]),
+        "Q6581072": fake_item_with_labels("Q6581072", &[("en", "female"), ("de", "weiblich")]),
+    })
+}
+
+/// Generate a German long description for a synthetic person with the given
+/// claims and German labels for all related items.
+async fn generate_de(claims: Value, extra_items: &[(&str, &str)]) -> String {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/w/api.php"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(fake_wbgetentities(fake_german_entities())),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let mut wd = WikiData::with_api_url(&format!("{}/w/api.php", mock_server.uri()));
+    insert_item_json(
+        &mut wd,
+        "Q100",
+        fake_item_with_labels("Q100", &[("en", "Test Person"), ("de", "Testperson")]),
+    );
+    for (id, label) in extra_items {
+        insert_item_json(
+            &mut wd,
+            id,
+            fake_item_with_labels(id, &[("en", label), ("de", label)]),
+        );
+    }
+
+    autodesc::lang_type::init_langs().await;
+    let sd = ShortDescription::new();
+    let opt = DescOptions {
+        lang: Lang::parse("de").unwrap(),
+        links: "text".to_string(),
+        ..Default::default()
+    };
+
+    LongDescGenerator::generate(&sd, "Q100", &claims, &opt, &mut wd)
+        .await
+        .expect("German long description should be produced")
+}
+
+/// A German person with citizenship, occupation and sex.
+fn claims_de_person(is_female: bool) -> Value {
+    let gender = if is_female { "Q6581072" } else { "Q6581097" };
+    json!({
+        "P31": [{ "mainsnak": { "datavalue": { "value": { "entity-type": "item", "id": "Q5" } } } }],
+        "P21": [{ "mainsnak": { "datavalue": { "value": { "entity-type": "item", "id": gender } } } }],
+        "P27": [{ "mainsnak": { "datavalue": { "value": { "entity-type": "item", "id": "Q183" } } } }],
+        "P106": [{ "mainsnak": { "datavalue": { "value": { "entity-type": "item", "id": "Q36180" } } } }]
+    })
+}
+
+fn claim_date(time: &str) -> Value {
+    json!([{ "mainsnak": { "datavalue": { "value": { "time": time, "precision": 11 } } } }])
+}
+
+fn claim_item(id: &str) -> Value {
+    json!([{ "mainsnak": { "datavalue": { "value": { "entity-type": "item", "id": id } } } }])
+}
+
 fn claims_person() -> Value {
     json!({
         "P31": [{ "mainsnak": { "datavalue": { "value": { "entity-type": "item", "id": "Q5" } } } }],
@@ -992,5 +1086,124 @@ async fn test_long_desc_fr_exact_dates_unchanged() {
     assert!(
         desc.contains("4 juillet 1934"),
         "French death date format: {desc}"
+    );
+}
+
+// ─── German Wikipedia biographical formatting ─────────────────────────────────
+
+/// German long descriptions use the genealogical signs after the name, and
+/// "ebenda" when the death place equals the birth place.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_long_desc_de_genealogical_signs_and_ebenda() {
+    let mut claims = claims_de_person(true);
+    claims["P569"] = claim_date("+1952-03-11T00:00:00Z");
+    claims["P19"] = claim_item("Q84");
+    claims["P570"] = claim_date("+2001-05-11T00:00:00Z");
+    claims["P20"] = claim_item("Q84");
+
+    let desc = generate_de(claims, &[]).await;
+
+    assert!(
+        desc.contains("(* 11. M\u{00e4}rz 1952 in London; \u{2020} 11. Mai 2001 ebenda)"),
+        "German genealogical parenthetical: {desc}"
+    );
+    assert!(
+        desc.contains("war eine"),
+        "Past tense for a deceased person: {desc}"
+    );
+    assert!(
+        !desc.contains("wurde am"),
+        "Birth date must not be repeated in prose: {desc}"
+    );
+    assert!(
+        !desc.contains("starb"),
+        "Death date must not be repeated in prose: {desc}"
+    );
+}
+
+/// A living German person gets only the birth part of the parenthetical, and
+/// the present tense.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_long_desc_de_living_parenthetical() {
+    let mut claims = claims_de_person(true);
+    claims["P569"] = claim_date("+1980-06-15T00:00:00Z");
+    claims["P19"] = claim_item("Q350");
+
+    let desc = generate_de(claims, &[]).await;
+
+    assert!(
+        desc.contains("(* 15. Juni 1980 in Cambridge)"),
+        "Living person parenthetical: {desc}"
+    );
+    assert!(desc.contains("ist eine"), "Present tense: {desc}");
+    assert!(!desc.contains("\u{2020}"), "No death sign: {desc}");
+}
+
+/// A different death place is rendered with "in", and the cause of death is
+/// still phrased in prose because the parenthetical only carries date/place.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_long_desc_de_different_death_place_and_cause() {
+    let mut claims = claims_de_person(false);
+    claims["P569"] = claim_date("+1952-03-11T00:00:00Z");
+    claims["P19"] = claim_item("Q84");
+    claims["P570"] = claim_date("+2001-05-11T00:00:00Z");
+    claims["P20"] = claim_item("Q350");
+    claims["P509"] = claim_item("Q12152");
+
+    let desc = generate_de(claims, &[]).await;
+
+    assert!(
+        desc.contains("(* 11. M\u{00e4}rz 1952 in London; \u{2020} 11. Mai 2001 in Cambridge)"),
+        "Distinct death place: {desc}"
+    );
+    assert!(
+        desc.contains("starb an Herzinfarkt."),
+        "Cause of death remains in prose: {desc}"
+    );
+}
+
+/// Parents and birth names are still rendered, without repeating the date and
+/// place that are already in the parenthetical.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_long_desc_de_parents_without_duplicate_dates() {
+    let mut claims = claims_de_person(false);
+    claims["P569"] = claim_date("+1952-03-11T00:00:00Z");
+    claims["P19"] = claim_item("Q84");
+    claims["P22"] = claim_item("Q101");
+    claims["P25"] = claim_item("Q102");
+
+    let desc = generate_de(claims, &[("Q101", "John Doe"), ("Q102", "Jane Doe")]).await;
+
+    assert!(
+        desc.contains("wurde als Sohn von John Doe und Jane Doe geboren"),
+        "Parents are rendered: {desc}"
+    );
+    assert!(
+        !desc.contains("1952 geboren") && !desc.contains("1952 in London geboren"),
+        "Birth date is not repeated: {desc}"
+    );
+}
+
+/// Without a nationality/occupation intro sentence, the German parenthetical
+/// is dropped with that sentence, so the birth section must render the date
+/// and place itself instead of losing them.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_long_desc_de_without_intro_renders_birth_in_prose() {
+    let mut claims = json!({
+        "P31": claim_item("Q5"),
+        "P21": claim_item("Q6581097"),
+    });
+    claims["P569"] = claim_date("+1952-03-11T00:00:00Z");
+    claims["P19"] = claim_item("Q84");
+
+    let desc = generate_de(claims, &[]).await;
+
+    assert!(
+        desc.contains("wurde am 11. M\u{00e4}rz 1952 in London geboren"),
+        "Birth date/place fall back to prose: {desc}"
+    );
+    assert!(
+        !desc.contains("(* 11. M\u{00e4}rz 1952"),
+        "Parenthetical must not survive without the intro: {desc}"
     );
 }
